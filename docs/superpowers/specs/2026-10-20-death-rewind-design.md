@@ -79,7 +79,7 @@
 | 关卡/局结束事件源 | `RaidUtilities.OnRaidEnd`（撤离或死亡结算时触发）、`SceneLoader.onStartedLoadingScene` |
 | Mod 配置目录约定 | `Duckov.app/Contents/ModConfig/<ModName>/config.json`（本机实例：`Contents/ModConfig/BattlefieldTypeKillNotice/config.json`） |
 | 战斗中已有仅含坐标的位置备份（20 条，3 秒间隔） | `PlayerPositionBackupManager`（与本 Mod 无关，不复用） |
-| Mod 加载机制 | 扫描 `Duckov.app/Contents/Mods/<Mod>/`，读 `info.ini` 的 `name` 作为命名空间，加载该命名空间下的 `ModBehaviour` 类；Harmony 不内置，需自带 2.4.1 |
+| Mod 加载机制 | `ModManager.DefaultModFolderPath = Path.Combine(Application.dataPath, "Mods")`（macOS 即 `Duckov.app/Contents/Resources/Data/Mods/<Mod>/`）；DLL 必须命名为 `<name>.dll`，同目录需 `info.ini`（扁平 `key=value`，`name` 必需）与 `preview.png`；入口类型必须是 `<name>.ModBehaviour` 且继承 `Duckov.Modding.ModBehaviour`，游戏通过 `Setup()`→`OnAfterSetup()` 初始化、`NotifyBeforeDeactivate()`→`OnBeforeDeactivate()` 卸载；Harmony 不内置，需自带 2.4.1（该包无 netstandard TFM，Mod 工程用 `net472` + 仓库内置 `vendor/0Harmony.dll`） | `Duckov.Modding.ModManager`、`Duckov.Modding.ModBehaviour` |
 
 ## 4. 总体架构
 
@@ -231,9 +231,9 @@ flowchart LR
   - `RawTime` = 注入的原始 unscaled 时间（仅日志用）；
   - `CurrentTick` = **有效 tick**：冻结期间不累加（`Tick` 在 `IsFrozen` 时只更新 `RawTime`）。
 - **锚点时间戳一律存于有效 tick 域**：`AbsTimestamp = CurrentTick`（自 Mod 启动起的**有效**秒数，冻结时长不计入）。锚点年龄 `Age = CurrentTick − AbsTimestamp`，**与网格原点无关**。
-- 网格排布另用 `GridTimestamp`（网格时间戳）：网格原点被重置时，**已有锚点的 `AbsTimestamp` 与 `Age` 不变**，只影响此后新锚点的 `GridTimestamp`。
+- 网格时间线由 `AnchorRing` **独占**（时钟不参与，避免两条时间线漂移）：`AnchorRing` 维护网格原点与其对应的有效 tick，网格时间戳 = `原点 + (当前 tick − 原点 tick)`；回退后 `ResetGridTo(锚点.GridTimestamp, 当前 tick)` 把原点重置到所选锚点，**已有锚点的 `AbsTimestamp` 与 `Age` 不变**。
 - 冻结期间网格推进与年龄累加**同时暂停**。
-- `RewindClock` 对外 API：`CurrentTick`、`GridTime`、`RawTime`、`IsFrozen`、`Tick(float)`、`Freeze()`、`Resume()`、`ResetGridOrigin(float gridTimestamp)`。
+- `RewindClock` 对外 API：`CurrentTick`、`RawTime`、`IsFrozen`、`Tick(float)`、`Freeze()`、`Resume()`、`Reset()`、`Age(double)`。
 
 ### 6.3 生成与网格编排（owner = `AnchorRing`）
 
