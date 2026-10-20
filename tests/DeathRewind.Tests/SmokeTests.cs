@@ -7,7 +7,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void Core_Sources_Are_Linked()
         {
-            Assert.True(true);
+            Assert.NotNull(typeof(DeathRewind.Core.Anchor));
         }
     }
 }
