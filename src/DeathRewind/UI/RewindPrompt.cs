@@ -1,34 +1,42 @@
 using System;
+using UnityEngine;
 
 namespace DeathRewind.UI
 {
-    /// <summary>
-    /// 死亡回退提示面板（IMGUI）。
-    /// TODO: 后续任务实现（Task 13）。当前为最小桩：不绘制任何界面。
-    /// </summary>
+    /// <summary>冻结期间绘制的确认面板。屏幕绝对坐标绘制，不挂到玩家对象上。</summary>
     public static class RewindPrompt
     {
-        /// <summary>面板是否处于打开状态。</summary>
-        public static bool IsOpen { get; private set; }
+        private static Action<bool> _callback;
+        private static bool _submitted;
 
-        /// <summary>TODO: 后续任务实现 —— 打开面板并注册回调。</summary>
-        public static void Open(Action<bool> callback)
-        {
-        }
+        public static bool IsOpen => _callback != null && !_submitted;
 
-        /// <summary>TODO: 后续任务实现 —— 关闭面板并清除回调。</summary>
-        public static void Close()
-        {
-        }
+        public static void Open(Action<bool> callback) { _callback = callback; _submitted = false; }
+        public static void Close() { _callback = null; _submitted = false; }
 
-        /// <summary>TODO: 后续任务实现 —— 提交选择（true=回退，false=继续）。</summary>
         public static void Submit(bool rewind)
         {
+            if (_callback == null || _submitted) return;
+            _submitted = true;
+            var cb = _callback;
+            _callback = null;
+            cb(rewind);
         }
 
-        /// <summary>TODO: 后续任务实现 —— 绘制面板（只能在 OnGUI 中调用）。</summary>
+        /// <summary>只能在 Unity 的 OnGUI 回调中调用。</summary>
         public static void Draw()
         {
+            if (_callback == null || _submitted) return;
+            float w = 460f, h = 180f;
+            var rect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
+            GUILayout.BeginArea(rect, GUI.skin.box);
+            GUILayout.Label("被击败了");
+            GUILayout.Label("回退到约 120–180 秒前的世界状态？");
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("继续（接受死亡）")) Submit(false);
+            if (GUILayout.Button("回退")) Submit(true);
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
         }
     }
 }
