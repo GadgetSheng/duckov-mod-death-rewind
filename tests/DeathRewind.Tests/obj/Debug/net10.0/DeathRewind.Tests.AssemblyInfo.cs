@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("DeathRewind.Tests")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b34d44e7f49cfba451a87f84c0dcb747097914e2")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+25a1893703f5dd2854dfc672dfb38e24c4bead6b")]
 [assembly: System.Reflection.AssemblyProductAttribute("DeathRewind.Tests")]
 [assembly: System.Reflection.AssemblyTitleAttribute("DeathRewind.Tests")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -8,6 +8,7 @@ namespace DeathRewind.Tests
         public void Core_Sources_Are_Linked()
         {
             Assert.NotNull(typeof(DeathRewind.Core.Anchor));
+            Assert.NotNull(typeof(DeathRewind.Core.RewindClock));
         }
     }
 }
