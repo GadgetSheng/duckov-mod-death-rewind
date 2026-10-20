@@ -1,0 +1,7 @@
+# 构建产物
+bin/
+obj/
+vendor/
+
+# macOS
+.DS_Store
