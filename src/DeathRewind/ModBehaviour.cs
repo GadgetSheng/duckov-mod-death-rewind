@@ -40,6 +40,7 @@ namespace DeathRewind
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
             _builder = new AnchorBuilder(_config, _store, _ring);
             _restorer = new WorldRestorer(_config, _ring, _store);
+            _restorer.SetSampler(_sampler);   // 恢复差量表需要按稳定 ID 找回敌人/门对象
 
             // 启动时清理孤儿文件（文件名不对应任何现存锚点）
             AnchorBuilder.CleanupOrphanFiles(new HashSet<int>());
