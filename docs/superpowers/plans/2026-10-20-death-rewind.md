@@ -2430,6 +2430,8 @@ namespace DeathRewind.Harmony
                     if (anchor == null)
                     {
                         Debug.Log("[DeathRewind] no eligible anchor");
+                        _interceptionActive = false;
+                        _owner.ReleaseTimeScale();
                         ScheduleReplay();
                         return;
                     }
@@ -2440,6 +2442,10 @@ namespace DeathRewind.Harmony
                 else
                 {
                     Debug.Log("[DeathRewind] player chose to accept death");
+                    // 这条路径不会进入 RestoreRoutine，必须在这里自行收口：
+                    // 解除冻结 + 清拦截标志，否则游戏会永久停在 0 倍速
+                    _interceptionActive = false;
+                    _owner.ReleaseTimeScale();
                     ScheduleReplay();
                 }
             }
