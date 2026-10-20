@@ -148,6 +148,57 @@ namespace DeathRewind.Unity
         /// <summary>回退中"移除"的敌人：只停用，销毁推迟到提交成功后。</summary>
         public void MarkDeferredDestroy(string enemyId) => _deferredDestroy.Add(enemyId);
 
+        // --- 注册表查询（供 WorldRestorer 的差量表按稳定 ID 找回对象） ---
+
+        /// <summary>按稳定 ID 找回敌人的 Health；对象已被游戏销毁时返回 null。</summary>
+        public Health GetEnemyHealth(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            foreach (var kv in _enemyObjects)
+            {
+                if (kv.Value != id) continue;
+                if (kv.Key == null) return null;
+                var health = kv.Key.GetComponent<Health>();
+                if (health != null) return health;
+            }
+            return null;
+        }
+
+        /// <summary>按稳定 ID 找回敌人的 GameObject；对象已被游戏销毁时返回 null。</summary>
+        public GameObject GetEnemyObject(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            foreach (var kv in _enemyObjects)
+            {
+                if (kv.Value != id) continue;
+                return kv.Key;
+            }
+            return null;
+        }
+
+        /// <summary>反向查询：GameObject → 稳定 ID；不在注册表内时返回 null。</summary>
+        public string GetEnemyId(GameObject go)
+        {
+            if (go == null) return null;
+            foreach (var kv in _enemyObjects)
+            {
+                if (kv.Key == go) return kv.Value;
+            }
+            return null;
+        }
+
+        /// <summary>按稳定 ID 找回门；对象已被销毁时返回 null。</summary>
+        public Door GetDoor(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            foreach (var kv in _doorIds)
+            {
+                if (kv.Value != id) continue;
+                return kv.Key;
+            }
+            return null;
+        }
+
         /// <summary>提交成功：销毁本次回退中被移除的敌人对象（失败路径不调用，保持可反向激活）。</summary>
         public void DestroyDeferredEnemies()
         {
