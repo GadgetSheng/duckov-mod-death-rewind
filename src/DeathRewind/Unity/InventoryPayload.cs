@@ -8,7 +8,7 @@ namespace DeathRewind.Unity
 {
     /// <summary>
     /// 背包 ↔ 不透明字节串。InventoryData/ItemTreeData 均为 [Serializable] 且字段为具体类型，JsonUtility 可用。
-    /// TODO: 后续任务实现（Task 8）会覆盖为完整版本（含锚点侧文件落盘配合）。
+    /// Task 8 已完整实现：Capture / Parse / ApplyAsync / VerifyRoundTrip 全部为真实逻辑，无空实现残留。
     /// </summary>
     public static class InventoryPayload
     {
