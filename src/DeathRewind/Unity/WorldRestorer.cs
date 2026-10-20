@@ -703,7 +703,11 @@ namespace DeathRewind.Unity
                     TrySetCurrentRaid(restored);
                 }
                 var lm = LevelManager.Instance;
-                if (lm != null) SetBoolField(lm, "dieTask", _death.IsDead);
+                // 注意：dieTask 必须复位为 false，而不是 _death.IsDead。
+                // 拦截时游戏原方法体被跳过，dieTask 从未被置位（此时为 false）；
+                // 若在此置为 true，随后重放的 OnMainCharacterDie 会因 `if (!dieTask)` 不成立而永不执行，
+                // 死亡流程（CharacterDieTask → ClosureView → 失败场景）将卡死。
+                if (lm != null) SetBoolField(lm, "dieTask", false);
 
                 ok = true;
             }
@@ -1068,64 +1072,19 @@ namespace DeathRewind.Unity
             return tod != null ? tod.Time : 0f;
         }
 
-        // --- 私有字段反射（集中在本文件内；后续 Task 12 会迁到 Compat/PrivateStateAccessor） ---
-
-        private static FieldInfo FindField(object target, string name)
-        {
-            if (target == null || string.IsNullOrEmpty(name)) return null;
-            Type t = target.GetType();
-            while (t != null)
-            {
-                var f = t.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly);
-                if (f != null) return f;
-                t = t.BaseType;
-            }
-            return null;
-        }
+        // --- 私有字段反射：统一走 Compat.PrivateStateAccessor（避免两套反射实现） ---
 
         private static bool GetBoolField(object target, string name)
-        {
-            var f = FindField(target, name);
-            if (f == null) { WarnMissingField(name); return false; }
-            try { return f.GetValue(target) is bool b && b; }
-            catch (Exception e) { Debug.LogWarning($"[DeathRewind] 读取私有字段 {name} 失败: {e.Message}"); return false; }
-        }
+            => Compat.PrivateStateAccessor.GetBool(target, name);
 
         private static void SetBoolField(object target, string name, bool value)
-        {
-            var f = FindField(target, name);
-            if (f == null) { WarnMissingField(name); return; }
-            try { f.SetValue(target, value); }
-            catch (Exception e) { Debug.LogWarning($"[DeathRewind] 写入私有字段 {name} 失败: {e.Message}"); }
-        }
+            => Compat.PrivateStateAccessor.SetBool(target, name, value);
 
         private static float GetFloatField(object target, string name)
-        {
-            var f = FindField(target, name);
-            if (f == null) { WarnMissingField(name); return 0f; }
-            try { return f.GetValue(target) is float v ? v : 0f; }
-            catch (Exception e) { Debug.LogWarning($"[DeathRewind] 读取私有字段 {name} 失败: {e.Message}"); return 0f; }
-        }
+            => Compat.PrivateStateAccessor.GetFloat(target, name);
 
         private static void SetFloatField(object target, string name, float value)
-        {
-            var f = FindField(target, name);
-            if (f == null) { WarnMissingField(name); return; }
-            try { f.SetValue(target, value); }
-            catch (Exception e) { Debug.LogWarning($"[DeathRewind] 写入私有字段 {name} 失败: {e.Message}"); }
-        }
-
-        private static void WarnMissingField(string name)
-        {
-            lock (_fieldWarnLock)
-            {
-                if (!_warnedFieldNames.Add(name)) return;
-            }
-            Debug.LogWarning($"[DeathRewind] 找不到私有字段 {name}");
-        }
-
-        private static readonly object _fieldWarnLock = new object();
-        private static readonly HashSet<string> _warnedFieldNames = new HashSet<string>();
+            => Compat.PrivateStateAccessor.SetFloat(target, name, value);
 
         // --- 存档键 ---
 
