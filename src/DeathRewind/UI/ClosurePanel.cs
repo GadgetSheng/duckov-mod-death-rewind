@@ -10,20 +10,22 @@ namespace DeathRewind.UI
     /// 注入到原生 YOU DIED 结算界面（ClosureView）上的回溯控件组。
     ///
     /// 布局：
-    ///   · 一行：[原生"继续"按钮] [回溯 N 秒按钮]（并排，整行尽量居中）
-    ///   · 回溯按钮正上方：白色提示文字 + 指向按钮的白色箭头
-    ///   · 按钮行下方：锚点时刻缩略图，按剩余空间尽量放大（按钮合并成一行后腾出的竖向空间）
+    ///   · 原生"继续"按钮**保持原样**（不收窄、不重排，避免与其父级布局组互相拉扯造成位移），
+    ///     回溯按钮（克隆）排在其**下一行**：同宽、水平居中；
+    ///   · 回溯按钮正下方：白色箭头（向上指向按钮）+ 白色提示文字；
+    ///   · 屏幕（全屏 Canvas）左侧垂直居中：锚点时刻缩略图（16:9，随左侧空白区自适应）。
     ///
-    /// 几何计算在 Core/DeathPanelLayout（纯函数、可单测）里做，这里只负责
-    /// Unity 对象的创建与坐标回写。所有坐标都在自建容器的本地空间里算，
-    /// 因此原生按钮被布局组件重排后仍能跟随；原生按钮自身的 Punch 缩放动画
-    /// 不会让整组控件抖动（测量用的是布局尺寸而非缩放后的包围盒）。
+    /// 全部坐标都在结算界面根 rect 的本地空间里算，
+    /// 几何计算在 Core/DeathPanelLayout（纯函数、可单测）里做，
+    /// 这里只负责 Unity 对象的创建与 RectTransform 回写。
+    /// 原生按钮被布局组件重排时会每帧重新对齐；
+    /// 原生按钮自身的 Punch 缩放动画不会影响排版（宽度取自布局尺寸，不取缩放后的包围盒）。
     /// </summary>
     public sealed class ClosurePanel : IDisposable
     {
-        private RectTransform _container;
-        private RectTransform _nativeRect;   // 原生"继续"按钮
-        private RectTransform _viewRect;     // 结算界面根 rect（画布边界）
+        private RectTransform _root;          // 结算界面根 rect（布局空间 + 注入对象的父节点）
+        private RectTransform _nativeRect;    // 原生"继续"按钮
+        private RectTransform _nativeParent;  // 原生按钮的父节点
         private RectTransform _rewindRect;
         private RectTransform _textRect;
         private RectTransform _arrowRect;
@@ -63,20 +65,12 @@ namespace DeathRewind.UI
         private void Build(Transform viewRoot, Button continueBtn, string rewindLabel, byte[] previewPng)
         {
             if (viewRoot == null || continueBtn == null) throw new ArgumentNullException(nameof(viewRoot));
+            _root = viewRoot as RectTransform;
+            if (_root == null) throw new InvalidOperationException("结算界面根节点缺少 RectTransform");
 
             _nativeRect = continueBtn.GetComponent<RectTransform>();
-            _viewRect = viewRoot as RectTransform;
-
-            // 自建容器：父节点是结算界面根 rect，本地原点落在左下角，便于直接用本地坐标排版。
-            var containerObj = new GameObject("DeathRewind_Panel", typeof(RectTransform));
-            _container = containerObj.GetComponent<RectTransform>();
-            _container.SetParent(viewRoot, false);
-            _container.anchorMin = Vector2.zero;
-            _container.anchorMax = Vector2.zero;
-            _container.pivot = Vector2.zero;
-            _container.sizeDelta = Vector2.zero;
-            _container.anchoredPosition = Vector2.zero;
-            _container.localScale = Vector3.one;
+            _nativeParent = _nativeRect.parent as RectTransform;
+            if (_nativeParent == null) throw new InvalidOperationException("原生按钮缺少 RectTransform 父节点");
 
             CreateRewindButton(continueBtn, rewindLabel);
             CreateHintText(continueBtn);
@@ -87,8 +81,8 @@ namespace DeathRewind.UI
 
         private void CreateRewindButton(Button continueBtn, string rewindLabel)
         {
-            // 克隆原生按钮保留原生样式（图片/字体/音效），但换到自建容器里，脱离原生布局。
-            var cloneObj = UnityEngine.Object.Instantiate(continueBtn.gameObject, _container);
+            // 克隆原生按钮保留原生样式（图片/字体/音效），挂在结算界面根节点下自行定位
+            var cloneObj = UnityEngine.Object.Instantiate(continueBtn.gameObject, _root);
             cloneObj.name = "DeathRewind_RewindButton";
             cloneObj.transform.localScale = Vector3.one;
 
@@ -101,6 +95,9 @@ namespace DeathRewind.UI
             btn.onClick.RemoveAllListeners();
             _rewindButton = btn;
             _rewindRect = cloneObj.GetComponent<RectTransform>();
+            _rewindRect.anchorMin = new Vector2(0.5f, 0.5f);
+            _rewindRect.anchorMax = new Vector2(0.5f, 0.5f);
+            _rewindRect.pivot = new Vector2(0.5f, 0.5f);
 
             var tmp = cloneObj.GetComponentInChildren<TextMeshProUGUI>(true);
             if (tmp != null) tmp.text = rewindLabel;
@@ -113,7 +110,7 @@ namespace DeathRewind.UI
         {
             var reference = FindReferenceFont(continueBtn);
             var go = new GameObject("DeathRewind_Hint", typeof(RectTransform));
-            go.transform.SetParent(_container, false);
+            go.transform.SetParent(_root, false);
             var tmp = go.AddComponent<TextMeshProUGUI>();
             tmp.text = "一次机会！";
             tmp.color = Color.white;
@@ -127,25 +124,32 @@ namespace DeathRewind.UI
                 tmp.fontSharedMaterial = reference.fontSharedMaterial;
             }
             _textRect = go.GetComponent<RectTransform>();
+            _textRect.anchorMin = new Vector2(0.5f, 0.5f);
+            _textRect.anchorMax = new Vector2(0.5f, 0.5f);
+            _textRect.pivot = new Vector2(0.5f, 0.5f);
         }
 
-        /// <summary>指向回溯按钮的白色箭头（程序生成的向下三角贴图，不依赖字体是否有箭头字形）。</summary>
+        /// <summary>指向回溯按钮的白色箭头（程序生成的三角贴图，垂直翻转后向上指向按钮）。</summary>
         private void CreateArrow()
         {
             _arrowTex = BuildTriangleTexture(64, 48);
             _arrowSprite = Sprite.Create(_arrowTex, new Rect(0, 0, _arrowTex.width, _arrowTex.height),
                 new Vector2(0.5f, 0.5f), 100f);
             var go = new GameObject("DeathRewind_Arrow", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            go.transform.SetParent(_container, false);
+            go.transform.SetParent(_root, false);
             var img = go.GetComponent<Image>();
             img.sprite = _arrowSprite;
             img.color = Color.white;
             img.raycastTarget = false;
             img.preserveAspect = true;
             _arrowRect = go.GetComponent<RectTransform>();
+            _arrowRect.anchorMin = new Vector2(0.5f, 0.5f);
+            _arrowRect.anchorMax = new Vector2(0.5f, 0.5f);
+            _arrowRect.pivot = new Vector2(0.5f, 0.5f);
+            _arrowRect.localScale = new Vector3(1f, -1f, 1f);   // 贴图朝下 → 翻转为朝上指向按钮
         }
 
-        /// <summary>锚点时刻的缩略图（16:9），显示在按钮行下方。</summary>
+        /// <summary>锚点时刻的缩略图（16:9），显示在屏幕左侧、垂直居中。</summary>
         private void CreatePreview(byte[] png)
         {
             if (png == null || png.Length == 0) return;
@@ -158,81 +162,118 @@ namespace DeathRewind.UI
             }
 
             var go = new GameObject("DeathRewind_Preview", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
-            go.transform.SetParent(_container, false);
+            go.transform.SetParent(_root, false);
             var img = go.GetComponent<RawImage>();
             img.texture = _previewTex;
             img.raycastTarget = false;
             _previewRect = go.GetComponent<RectTransform>();
+            _previewRect.anchorMin = new Vector2(0.5f, 0.5f);
+            _previewRect.anchorMax = new Vector2(0.5f, 0.5f);
+            _previewRect.pivot = new Vector2(0.5f, 0.5f);
         }
 
         /// <summary>
-        /// 重新排版：原生按钮被布局组件重排 / Punch 动画缩放后调用，保证整组控件跟随。
+        /// 重新排版：原生按钮被布局组件重排后调用，保证整组控件跟随。
         /// </summary>
         public void Layout()
         {
-            if (_container == null || _nativeRect == null) return;
+            if (_root == null || _nativeRect == null) return;
 
-            RectF native = NativeLayoutRect();
-            RectF bounds = LocalBounds();
-            if (native.Width <= 0f || native.Height <= 0f || bounds.Width <= 0f) return;
+            RectF native = NativeRectInRootSpace();
+            RectF canvas = RootRect();                          // 按钮行参照根节点 rect（与已验收布局完全一致）
+            RectF previewCanvas = CanvasRectInRootSpace();      // 仅缩略图参照全屏 Canvas（屏幕左下角）
+            if (native.Width <= 0f || native.Height <= 0f || canvas.Width <= 0f) return;
 
-            var layout = DeathPanelLayout.Compute(native, bounds);
+            var layout = DeathPanelLayout.Compute(native, canvas, previewCanvas);
 
-            SetAnchored(_rewindRect, layout.RewindButton);
-            SetAnchored(_arrowRect, layout.Arrow);
-            SetAnchored(_textRect, layout.HintText);
+            ApplyToChild(_rewindRect, layout.RewindButton);
+            ApplyToChild(_arrowRect, layout.Arrow);
+            ApplyToChild(_textRect, layout.HintText);
             if (_previewRect != null)
             {
                 if (layout.PreviewSpaceShortfall > 0f)
                     Debug.Log($"[DeathRewind] 缩略图空间不足 {layout.PreviewSpaceShortfall:0}px，缩到 {layout.Preview.Height:0}px");
-                SetAnchored(_previewRect, layout.Preview);
+                ApplyToChild(_previewRect, layout.Preview);
             }
         }
 
         /// <summary>
-        /// 原生按钮在本容器本地空间中的布局矩形。
-        /// 用布局尺寸（rect.size）而不是缩放后的包围盒：原生按钮有 Punch 缩放动画，
-        /// 用包围盒会让整组控件跟着抖。
+        /// 原生按钮在根 rect 空间中的矩形。
+        /// 宽度取自布局尺寸（sizeDelta × 父级缩放），不取缩放后的世界包围盒 ——
+        /// 原生按钮带 Punch 缩放动画，用包围盒会让整组控件跟着抖。
         /// </summary>
-        private RectF NativeLayoutRect()
+        private RectF NativeRectInRootSpace()
         {
-            var rect = _nativeRect.rect;
-            // 把 native 所在分支的额外缩放折算掉（Content/ButtonContainer 一般是 1）
-            float sx = _nativeRect.lossyScale.x / Mathf.Max(_container.lossyScale.x, 1e-6f);
-            float sy = _nativeRect.lossyScale.y / Mathf.Max(_container.lossyScale.y, 1e-6f);
-            float w = rect.width * sx;
-            float h = rect.height * sy;
+            float unitX = _nativeParent.lossyScale.x / Mathf.Max(_root.lossyScale.x, 1e-6f);
+            float unitY = _nativeParent.lossyScale.y / Mathf.Max(_root.lossyScale.y, 1e-6f);
+            float w = _nativeRect.sizeDelta.x * unitX;
+            float h = _nativeRect.sizeDelta.y * unitY;
 
-            // 中心点：TransformPoint 不受自身缩放影响（Punch 动画不会让中心漂移）
-            Vector3 centerWorld = _nativeRect.TransformPoint(rect.center);
-            Vector3 centerLocal = _container.InverseTransformPoint(centerWorld);
-            return new RectF(centerLocal.x - w * 0.5f, centerLocal.y - h * 0.5f,
-                centerLocal.x + w * 0.5f, centerLocal.y + h * 0.5f);
-        }
-
-        /// <summary>结算界面（画布）的本地边界。</summary>
-        private RectF LocalBounds()
-        {
-            if (_viewRect == null) return new RectF(0, 0, Screen.width, Screen.height);
+            // 中心：世界角点求中心（Punch 缩放以轴心为中心，中心不变）
             var corners = new Vector3[4];
-            _viewRect.GetWorldCorners(corners);
-            var p0 = _container.InverseTransformPoint(corners[0]);
-            var p2 = _container.InverseTransformPoint(corners[2]);
-            float xMin = Mathf.Min(p0.x, p2.x);
-            float xMax = Mathf.Max(p0.x, p2.x);
-            float yMin = Mathf.Min(p0.y, p2.y);
-            float yMax = Mathf.Max(p0.y, p2.y);
-            return new RectF(xMin, yMin, xMax, yMax);
+            _nativeRect.GetWorldCorners(corners);
+            var c = _root.InverseTransformPoint((corners[0] + corners[2]) * 0.5f);
+            return new RectF(c.x - w * 0.5f, c.y - h * 0.5f, c.x + w * 0.5f, c.y + h * 0.5f);
         }
 
-        private static void SetAnchored(RectTransform rect, RectF r)
+        /// <summary>结算界面根 rect 在自身空间的边界。</summary>
+        private RectF RootRect()
+        {
+            var r = _root.rect;
+            return new RectF(r.xMin, r.yMin, r.xMax, r.yMax);
+        }
+
+        /// <summary>
+        /// Canvas（全屏）矩形换算到根节点本地空间。
+        /// ClosureView 根节点不一定是全屏 rect；"窗口左下角"必须以 Canvas 为准，
+        /// 否则预览图会贴在根节点（可能是内嵌面板）的左下角而不是屏幕左下角。
+        /// </summary>
+        private RectF CanvasRectInRootSpace()
+        {
+            var canvas = _root.GetComponentInParent<Canvas>();
+            var crt = canvas != null ? canvas.transform as RectTransform : null;
+            if (crt == null || crt == _root) return RootRect();
+
+            var corners = new Vector3[4];
+            crt.GetWorldCorners(corners);
+            var a = _root.InverseTransformPoint(corners[0]);   // 左下
+            var b = _root.InverseTransformPoint(corners[2]);   // 右上
+            return new RectF(
+                Mathf.Min(a.x, b.x), Mathf.Min(a.y, b.y),
+                Mathf.Max(a.x, b.x), Mathf.Max(a.y, b.y));
+        }
+
+        /// <summary>把根空间里的目标矩形写回注入对象（父节点就是根 rect）。</summary>
+        private void ApplyToChild(RectTransform rect, RectF target)
         {
             if (rect == null) return;
-            rect.anchorMin = Vector2.zero;
-            rect.anchorMax = Vector2.zero;
-            rect.pivot = Vector2.zero;
-            rect.sizeDelta = new Vector2(r.Width, r.Height);
-            rect.anchoredPosition = new Vector2(r.XMin, r.YMin);
+            var parentRect = rect.parent as RectTransform;
+            if (parentRect == null) return;
+            float unitX = _root.lossyScale.x / Mathf.Max(parentRect.lossyScale.x, 1e-6f);
+            float unitY = _root.lossyScale.y / Mathf.Max(parentRect.lossyScale.y, 1e-6f);
+            float w = target.Width * unitX;
+            float h = target.Height * unitY;
+            rect.sizeDelta = new Vector2(w, h);
+
+            var anchorPoint = new Vector2(
+                parentRect.rect.xMin + rect.anchorMin.x * parentRect.rect.width,
+                parentRect.rect.yMin + rect.anchorMin.y * parentRect.rect.height);
+            var pivotPoint = new Vector2(
+                target.XMin + rect.pivot.x * w,
+                target.YMin + rect.pivot.y * h);
+            rect.anchoredPosition = pivotPoint - anchorPoint;
+        }
+
+        /// <summary>把根空间里的矩形换算到某个父节点的本地空间。</summary>
+        private RectF ToParentSpace(RectF target, RectTransform parent)
+        {
+            Vector3 worldMin = _root.TransformPoint(new Vector3(target.XMin, target.YMin, 0f));
+            Vector3 worldMax = _root.TransformPoint(new Vector3(target.XMax, target.YMax, 0f));
+            Vector3 localMin = parent.InverseTransformPoint(worldMin);
+            Vector3 localMax = parent.InverseTransformPoint(worldMax);
+            return new RectF(
+                Mathf.Min(localMin.x, localMax.x), Mathf.Min(localMin.y, localMax.y),
+                Mathf.Max(localMin.x, localMax.x), Mathf.Max(localMin.y, localMax.y));
         }
 
         /// <summary>找参考字体：优先结算界面上"UGLY"标题那种手写大字，否则取字号最大的文字。</summary>
@@ -298,10 +339,25 @@ namespace DeathRewind.UI
 
         public void Dispose()
         {
-            if (_container != null)
+            if (_rewindRect != null)
             {
-                UnityEngine.Object.Destroy(_container.gameObject);
-                _container = null;
+                UnityEngine.Object.Destroy(_rewindRect.gameObject);
+                _rewindRect = null;
+            }
+            if (_textRect != null)
+            {
+                UnityEngine.Object.Destroy(_textRect.gameObject);
+                _textRect = null;
+            }
+            if (_arrowRect != null)
+            {
+                UnityEngine.Object.Destroy(_arrowRect.gameObject);
+                _arrowRect = null;
+            }
+            if (_previewRect != null)
+            {
+                UnityEngine.Object.Destroy(_previewRect.gameObject);
+                _previewRect = null;
             }
             if (_previewTex != null)
             {
@@ -319,12 +375,9 @@ namespace DeathRewind.UI
                 _arrowTex = null;
             }
             _rewindButton = null;
-            _rewindRect = null;
-            _textRect = null;
-            _arrowRect = null;
-            _previewRect = null;
             _nativeRect = null;
-            _viewRect = null;
+            _nativeParent = null;
+            _root = null;
         }
     }
 }

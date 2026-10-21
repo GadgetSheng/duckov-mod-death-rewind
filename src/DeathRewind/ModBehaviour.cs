@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using DeathRewind.Config;
 using DeathRewind.Core;
 using DeathRewind.Harmony;
+using DeathRewind.UI;
 using DeathRewind.Unity;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
@@ -23,9 +24,6 @@ namespace DeathRewind
         private WorldRestorer _restorer;
         private AnchorBuildContext _pendingBuild;
         private double _nextSampleAt;
-        private Coroutine _thumbnailRoutine;
-        private byte[] _latestThumbnail;
-        private double _lastThumbnailTick = double.NegativeInfinity;
         private double? _levelStartTick;
         private readonly Dictionary<string, Anchor> _levelStartAnchors = new Dictionary<string, Anchor>();
         private readonly HashSet<string> _scenesWithStartAnchor = new HashSet<string>();
@@ -63,7 +61,7 @@ namespace DeathRewind
             // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
-            _builder = new AnchorBuilder(_config, _store, _ring, _sampler, GetLatestThumbnail);   // 锚点采集需要按 ID 找回敌人物品
+            _builder = new AnchorBuilder(_config, _store, _ring, _sampler, CaptureAnchorThumbnail);   // 锚点采集需要按 ID 找回敌人物品
             _restorer = new WorldRestorer(_config, _ring, _store);
             _restorer.SetSampler(_sampler);   // 恢复差量表需要按稳定 ID 找回敌人/门对象
 
@@ -107,8 +105,7 @@ namespace DeathRewind
             {
                 Debug.LogError($"[DeathRewind] EnemyPersistencePatch install failed: {e}");
             }
-            // 缩略图端帧抓取循环：全屏截图必须在帧末做才拿得到完整画面
-            _thumbnailRoutine = StartCoroutine(ThumbnailLoop());
+            // 缩略图改为锚点构建同帧抓取（见 CaptureAnchorThumbnail），不再需要端帧循环
             Debug.Log("[DeathRewind] initialized");
         }
 
@@ -145,40 +142,19 @@ namespace DeathRewind
         {
             ReleaseTimeScale();
             DeathInterceptor.Uninstall();
-            HurtGatePatch.Uninstall();
             EnemyPersistencePatch.Uninstall();
-            if (_thumbnailRoutine != null)
-            {
-                StopCoroutine(_thumbnailRoutine);
-                _thumbnailRoutine = null;
-            }
+            RewindIndicator.Dispose();
             _hooks?.Uninstall();
             Debug.Log("[DeathRewind] deactivated");
         }
 
-        /// <summary>端帧定期抓取屏幕缩略图：全屏画面的缩小版，供锚点构建时取用。</summary>
-        private IEnumerator ThumbnailLoop()
-        {
-            while (true)
-            {
-                yield return new WaitForEndOfFrame();
-                try
-                {
-                    if (_config == null || !_config.Enabled || _clock == null) continue;
-                    if (_clock.IsFrozen) continue;   // 冻结画面是死亡定格，不代表锚点时刻
-                    if (_clock.CurrentTick - _lastThumbnailTick < _config.AnchorInterval) continue;
-                    _lastThumbnailTick = _clock.CurrentTick;
-                    _latestThumbnail = ThumbnailCapture.Capture();
-                }
-                catch (Exception e)
-                {
-                    Debug.LogWarning($"[DeathRewind] 缩略图抓取异常: {e.Message}");
-                }
-            }
-        }
-
-        /// <summary>AnchorBuilder 的缩略图来源：最近一次端帧抓取的画面（可能为 null）。</summary>
-        private byte[] GetLatestThumbnail() => _latestThumbnail;
+        /// <summary>
+        /// 锚点缩略图：在锚点构建的**同一帧**直接抓屏。
+        /// 与锚点状态（0.25s 采样的玩家位姿）的时间差 ≤ 一帧，保证"图示位置 = 回溯位置"；
+        /// 早期用独立 5s 循环缓存画面，与锚点网格不同步，最多漂移一个锚点间隔。
+        /// CaptureScreenshotAsTexture 读的是上一渲染帧（≈30ms 前），成本数毫秒、每 5s 一次可接受。
+        /// </summary>
+        private byte[] CaptureAnchorThumbnail() => ThumbnailCapture.Capture();
 
         private void Update()
         {
@@ -224,7 +200,6 @@ namespace DeathRewind
             {
                 _lastSceneKey = sceneKey;
                 _pendingBuild = null;
-                _latestThumbnail = null;   // 旧画面对新场景的锚点预览无效
             }
 
             // 推进正在进行的锚点构建：采集分帧进行，文件 IO 在后台线程
@@ -260,6 +235,10 @@ namespace DeathRewind
                 }
             }
 
+            // HUD "1up" 硬币指示：与死亡拦截同一判定（RewindCount < MaxRewinds），
+            // 还有回溯机会时显示、用掉后自动隐藏；HUD 未就绪时内部带 1s 重试节流
+            RewindIndicator.SetAvailable(_ring != null && _ring.RewindCount < _config.MaxRewinds);
+
             HandleDebugHotkeys();
         }
 
@@ -273,8 +252,6 @@ namespace DeathRewind
             _builder?.ResetCache();
             _pendingBuild = null;
             _nextSampleAt = _clock.CurrentTick;
-            _latestThumbnail = null;
-            _lastThumbnailTick = double.NegativeInfinity;   // 进图后尽快抓第一张缩略图
             _levelStartTick = _clock.CurrentTick;
             _startAnchorNotBeforeTick = _clock.CurrentTick + StartAnchorSettleSeconds;
             // 本图的实际游玩场景 = level started 时激活的场景（此时地图子场景已加载激活）

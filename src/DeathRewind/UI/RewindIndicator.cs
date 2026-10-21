@@ -1,4 +1,5 @@
 using System;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -29,6 +30,7 @@ namespace DeathRewind.UI
         private static Texture2D _coinTex;
         private static Sprite _coinSprite;
         private static bool _visible;
+        private static float _retryNotBefore;   // HUD 未就绪时的重试节流（每帧递归查找太贵）
 
         /// <summary>当前是否已显示（供日志/测试查询）。</summary>
         public static bool Visible => _visible;
@@ -81,6 +83,8 @@ namespace DeathRewind.UI
         private static bool EnsureCreated()
         {
             if (_row != null) return true;
+            if (Time.unscaledTime < _retryNotBefore) return false;
+            _retryNotBefore = Time.unscaledTime + 1f;   // 失败后 1s 内不再全场景递归查找
 
             var hud = FindHudCanvas();
             if (hud == null) return false;
@@ -115,6 +119,23 @@ namespace DeathRewind.UI
             _icon.raycastTarget = false;
             _icon.preserveAspect = true;
 
+            // "1UP" 文字标签（硬币右侧，白色粗体）
+            var labelObj = new GameObject("Label", typeof(RectTransform));
+            labelObj.transform.SetParent(rowRect, false);
+            var tmp = labelObj.AddComponent<TextMeshProUGUI>();
+            tmp.text = "1UP";
+            tmp.color = Color.white;
+            tmp.fontSize = 24f;
+            tmp.fontStyle = FontStyles.Bold;
+            tmp.alignment = TextAlignmentOptions.Left;
+            tmp.raycastTarget = false;
+            var labelRect = (RectTransform)labelObj.transform;
+            labelRect.anchorMin = new Vector2(0f, 1f);
+            labelRect.anchorMax = new Vector2(0f, 1f);
+            labelRect.pivot = new Vector2(0f, 0.5f);
+            labelRect.sizeDelta = new Vector2(90f, RowHeight);
+            labelRect.anchoredPosition = new Vector2(IconOffsetX + IconSize * 0.5f + 8f, IconOffsetY);
+
             // 排在状态栏最上方（原生条目是追加到末尾的）
             rowRect.SetAsFirstSibling();
             _row.SetActive(_visible);
@@ -123,7 +144,7 @@ namespace DeathRewind.UI
 
         private static GameObject FindHudCanvas()
         {
-            var lm = Duckov.Scenes.LevelManager.Instance;
+            var lm = LevelManager.Instance;
             if (lm != null)
             {
                 var found = FindChild(lm.transform, HudCanvasName);

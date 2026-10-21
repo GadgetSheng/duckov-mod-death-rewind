@@ -11,6 +11,7 @@ using Duckov.Scenes;
 using HarmonyLib;
 using HarmonyLibHarmony = HarmonyLib.Harmony;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 namespace DeathRewind.Harmony
@@ -547,6 +548,28 @@ namespace DeathRewind.Harmony
             catch (Exception e)
             {
                 Debug.LogWarning($"[DeathRewind] 玩家状态终检失败: {e.Message}");
+            }
+
+            // 3) 血量 UI 重同步：E2 的 SetHealth 发生在 isDead 复位之前，事件驱动的头顶血条
+            //    （HealthBar 只订阅 OnHealthChange/OnHurt，且死亡期间对象池会释放条目）可能
+            //    丢掉这次变更，导致血条显示与实际数值脱节。这里统一补发变更事件强制重刷。
+            try
+            {
+                var health = LevelManager.Instance?.MainCharacter?.Health;
+                if (health != null)
+                {
+                    const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                    foreach (var name in new[] { "OnMaxHealthChange", "OnHealthChange" })
+                    {
+                        if (typeof(Health).GetField(name, flags)?.GetValue(health) is UnityEvent<Health> ev)
+                            ev.Invoke(health);
+                    }
+                    Debug.Log($"[DeathRewind] 血量 UI 事件补发: hp={health.CurrentHealth:0.#}/{health.MaxHealth:0.#}");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DeathRewind] 血量 UI 事件补发失败: {e.Message}");
             }
         }
 

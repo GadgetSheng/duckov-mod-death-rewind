@@ -1,0 +1,33 @@
+"workshopitem"
+{
+    "appid"           "3167020"
+    "publishedfileid" "3823953866"
+    "contentfolder"   "/Users/gadget/Library/Application Support/Steam/steamapps/common/Escape from Duckov/Duckov.app/Contents/Mods/DeathRewind"
+    "previewfile"     "/Users/gadget/workspace/mod-duckov/preview_steam.jpg"
+    "visibility"      "0"
+    "title"           "死亡回溯"
+    "description"     "死亡时在结算界面获得一次回溯机会，回到约 60 秒前的自己：位置、朝向、血量全部还原（世界与物品不回滚）。
+进图不足 60 秒死亡则回到进图时的位置。
+
+特性：
+· 每关一次复活回溯机会（YOU DIED 界面一键操作）
+· 回溯按钮旁附锚点时刻画面预览
+· 进图不足 60 秒 → 回到进图位置
+· 地道/楼层内暂不支持回溯
+
+萌新做的第一款mod！（AI开发）由于不熟练所以可能会导致有些意想不到的bug什么的（）如果遇到了欢迎在留言
+
+――― 更新日志 ―――
+[v1.0.2] 2026-10-21
+· 调整：回溯按钮移至「继续」按钮正下方，不再挤占同一行
+· 调整：锚点预览图移至屏幕左侧垂直居中并放大
+· 新增：回溯复活血量下限 50%，残血时刻回溯不再落地秒死
+[v1.0.1] 2026-10-21
+· 修复：与内嵌旧版 Harmony 的 Mod（如超级宠物）同装时，回溯功能完全失效
+· 修复：复活后血条与实际血量不同步
+· 新增：HUD 状态栏「1up」硬币提示本关回溯机会，使用后消失"
+    "changenote"      "v1.0.2
+· 调整：回溯按钮移至「继续」按钮正下方，不再挤占同一行
+· 调整：锚点预览图移至屏幕左侧垂直居中并放大
+· 新增：回溯复活血量下限 50%，残血时刻回溯不再落地秒死"
+}

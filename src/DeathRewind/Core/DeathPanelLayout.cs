@@ -15,13 +15,14 @@ namespace DeathRewind.Core
             XMin = xMin; YMin = yMin; XMax = xMax; YMax = yMax;
         }
 
-        public static RectF FromCenter(float cx, float cy, float w, float h)
-            => new RectF(cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy + h * 0.5f);
-
         public float Width => XMax - XMin;
         public float Height => YMax - YMin;
         public float CenterX => (XMin + XMax) * 0.5f;
         public float CenterY => (YMin + YMax) * 0.5f;
+        public float Top => YMax;
+        public float Bottom => YMin;
+        public float Left => XMin;
+        public float Right => XMax;
 
         public override string ToString()
             => $"[({XMin:0.#},{YMin:0.#})-({XMax:0.#},{YMax:0.#})]";
@@ -30,30 +31,33 @@ namespace DeathRewind.Core
     /// <summary>
     /// 死亡结算界面上注入控件组的排版计算（纯函数，不依赖 Unity）。
     ///
-    /// 布局约定：
-    ///   · 回溯按钮与原生"继续"按钮同一行（底边对齐），并排；
-    ///   · 白色提示文字在回溯按钮正上方，箭头夹在文字与按钮之间（指向按钮）；
-    ///   · 锚点缩略图在按钮行下方，按剩余竖向空间尽量放大。
+    /// 布局约定（所有坐标都在原生"继续"按钮的父容器空间里）：
+    ///   · 原生"继续"按钮**保持原样**（不收窄、不重排），回溯按钮在其**下一行**：
+    ///     与继续按钮同宽、水平居中对齐；
+    ///   · 白色提示文字在回溯按钮**下方**，箭头夹在按钮与文字之间（向上指向按钮）；
+    ///   · 锚点缩略图在屏幕（全屏 Canvas）左侧垂直居中，尺寸按左侧空白区自适应。
     /// </summary>
     public static class DeathPanelLayout
     {
-        public const float ButtonGap = 32f;      // 两个按钮之间的水平间距
+        public const float ButtonGap = 16f;      // 两个按钮之间的水平间距
+        public const float ButtonRowGap = 14f;   // 回溯按钮与继续按钮的垂直间距
         public const float RowBottomGap = 20f;   // 缩略图与按钮行的垂直间距
         public const float ArrowWidth = 44f;
         public const float ArrowHeight = 30f;
         public const float ArrowGap = 8f;        // 箭头底部与按钮顶部的间距
         public const float TextGap = 10f;        // 文字底部与箭头顶部的间距
         public const float TextHeight = 56f;
-        public const float Margin = 24f;         // 与结算界面边界的最小留白
+        public const float Margin = 24f;         // 与画布边界的最小留白
         public const float PreviewAspect = 16f / 9f;
         public const float MaxPreviewHeight = 420f;
         public const float MinPreviewHeight = 140f;
+        public const float MinButtonWidth = 120f;
 
         public struct Result
         {
-            /// <summary>回溯按钮是否排在原生按钮右侧。</summary>
-            public bool RewindOnRight;
-            /// <summary>回溯按钮矩形。</summary>
+            /// <summary>变窄后的原生"继续"按钮矩形（占左半边）。</summary>
+            public RectF NativeButton;
+            /// <summary>回溯按钮矩形（占右半边，与原生按钮同一行）。</summary>
             public RectF RewindButton;
             /// <summary>箭头矩形（指向回溯按钮）。</summary>
             public RectF Arrow;
@@ -67,75 +71,60 @@ namespace DeathRewind.Core
 
         /// <summary>
         /// 计算注入控件组的排版。
-        /// nativeButton：原生"继续"按钮在容器本地空间的矩形。
-        /// bounds：结算界面（画布）在容器本地空间的边界。
+        /// nativeRect：原生"继续"按钮在父容器空间的矩形。
+        /// canvasRect：按钮行/文字/箭头的参照边界（结算界面根节点，同一空间）。
+        /// previewCanvasRect：缩略图的参照边界（全屏 Canvas，换算到同一空间）；null 时用 canvasRect。
         /// </summary>
-        public static Result Compute(RectF nativeButton, RectF bounds)
+        public static Result Compute(RectF nativeRect, RectF canvasRect, RectF? previewCanvasRect = null)
         {
             var r = new Result();
-            float nativeW = nativeButton.Width;
-            float nativeH = nativeButton.Height;
-            if (nativeW <= 0f || nativeH <= 0f || bounds.Width <= 0f) return r;
+            float w = nativeRect.Width;
+            float h = nativeRect.Height;
+            if (w <= 0f || h <= 0f || canvasRect.Width <= 0f) return r;
 
-            // 回溯按钮：与原生按钮同高，宽度约为原生按钮的一半（标签比"继续"短）
-            float rewindW = Clamp(nativeW * 0.5f, 200f, 460f);
-            float maxRewindW = bounds.Width - 2f * Margin - nativeW - ButtonGap;
-            if (maxRewindW > 0f) rewindW = Math.Min(rewindW, Math.Max(maxRewindW, 160f));
+            // --- 原生"继续"按钮保持原样（不收窄、不重排，避免与其父级布局组互相拉扯），
+            //     回溯按钮在其下一行：同宽、水平居中 ---
+            r.NativeButton = nativeRect;
+            float rewindCx = nativeRect.CenterX;
+            float rewindTop = nativeRect.Bottom - ButtonRowGap;
+            r.RewindButton = new RectF(rewindCx - w * 0.5f, rewindTop - h, rewindCx + w * 0.5f, rewindTop);
 
-            // 选边：并排后整行中心更靠近画面中心的一侧
-            float centerXIfRight = (nativeButton.XMin + nativeButton.XMax + ButtonGap + rewindW) * 0.5f;
-            float centerXIfLeft = (nativeButton.XMin - ButtonGap - rewindW + nativeButton.XMax) * 0.5f;
-            r.RewindOnRight = Math.Abs(centerXIfRight - bounds.CenterX) <= Math.Abs(centerXIfLeft - bounds.CenterX);
+            float bottom = r.RewindButton.Bottom;
 
-            float rewindX = r.RewindOnRight
-                ? nativeButton.XMax + ButtonGap
-                : nativeButton.XMin - ButtonGap - rewindW;
-            float rewindY = nativeButton.YMin;   // 底边对齐 → 同一行
-            r.RewindButton = new RectF(rewindX, rewindY, rewindX + rewindW, rewindY + nativeH);
-
+            // --- 箭头：回溯按钮下方，向上指向按钮 ---
             float rewindCenterX = r.RewindButton.CenterX;
-            float rewindTop = r.RewindButton.YMax;
+            r.Arrow = new RectF(rewindCenterX - ArrowWidth * 0.5f, bottom - ArrowGap - ArrowHeight,
+                rewindCenterX + ArrowWidth * 0.5f, bottom - ArrowGap);
 
-            // 箭头：文字与按钮之间，向下指向回溯按钮
-            r.Arrow = new RectF(rewindCenterX - ArrowWidth * 0.5f, rewindTop + ArrowGap,
-                rewindCenterX + ArrowWidth * 0.5f, rewindTop + ArrowGap + ArrowHeight);
-
-            // 白色提示文字：回溯按钮正上方
-            float textW = Math.Max(rewindW + 120f, 300f);
-            float textY = rewindTop + ArrowGap + ArrowHeight + TextGap;
+            // --- 白色提示文字：箭头下方 ---
+            float textW = Math.Max(w + 120f, 300f);
+            float textY = r.Arrow.YMin - TextGap - TextHeight;
             r.HintText = new RectF(rewindCenterX - textW * 0.5f, textY,
                 rewindCenterX + textW * 0.5f, textY + TextHeight);
 
-            // 缩略图：按钮行下方，按剩余空间尽量放大
-            float rowBottom = Math.Min(nativeButton.YMin, rewindY);
-            float available = rowBottom - bounds.YMin - Margin - RowBottomGap;
+            // --- 缩略图：屏幕（全屏 Canvas）左侧、垂直居中，宽度按左侧空白区尽量放大
+            //     （右缘不超过继续按钮左缘，避免盖住结算面板的进度条/奖励行） ---
+            RectF pc = previewCanvasRect ?? canvasRect;
+            float leftAvailW = nativeRect.Left - Margin - (pc.Left + Margin);
             float imgH = 0f;
             float imgW = 0f;
-            if (available > 0f)
+            if (leftAvailW > 0f)
             {
-                imgH = Math.Min(available, MaxPreviewHeight);
-                imgW = imgH * PreviewAspect;
-                if (imgW > bounds.Width - 2f * Margin)
+                imgW = leftAvailW;
+                imgH = imgW / PreviewAspect;
+                if (imgH > MaxPreviewHeight)
                 {
-                    imgW = Math.Max(bounds.Width - 2f * Margin, 0f);
-                    imgH = imgW / PreviewAspect;
+                    imgH = MaxPreviewHeight;
+                    imgW = imgH * PreviewAspect;
                 }
             }
             if (imgH < MinPreviewHeight)
-                r.PreviewSpaceShortfall = MinPreviewHeight - available;   // 不足的量（px），>0 表示空间不够
-            float imgX = Clamp(rewindCenterX - imgW * 0.5f,
-                bounds.XMin + Margin, bounds.XMax - Margin - imgW);
-            float imgY = rowBottom - RowBottomGap - imgH;
-            if (imgH <= 0f)
-            {
-                // 没有可用空间：高度为 0 的占位矩形，且不越出画布
-                imgY = Math.Max(rowBottom - RowBottomGap, bounds.YMin);
-            }
+                r.PreviewSpaceShortfall = MinPreviewHeight - imgH;   // 不足的量（px）
+
+            float imgX = pc.Left + Margin;
+            float imgY = pc.CenterY - imgH * 0.5f;   // 垂直居中；无空间时退化为中线上的零高矩形
             r.Preview = new RectF(imgX, imgY, imgX + imgW, imgY + imgH);
             return r;
         }
-
-        private static float Clamp(float v, float min, float max)
-            => v < min ? min : (v > max ? max : v);
     }
 }

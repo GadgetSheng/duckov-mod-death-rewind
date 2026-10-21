@@ -21,6 +21,8 @@ namespace DeathRewind.Unity
     public sealed class WorldRestorer
     {
         private const double PhaseTimeoutSeconds = 30.0;
+        /// <summary>回溯复活血量下限（占最大血量比例）。</summary>
+        internal const float ReviveHealthFloorRatio = 0.5f;
 
         private readonly Config.ModConfig _config;
         private readonly AnchorRing _ring;
@@ -690,7 +692,15 @@ namespace DeathRewind.Unity
                 {
                     main.transform.position = ToVector3(anchor.Player.Position);
                     main.transform.rotation = ToQuaternion(anchor.Player.Rotation);
-                    if (main.Health != null) main.Health.SetHealth(anchor.Player.Health);
+                    if (main.Health != null)
+                    {
+                        // 血量下限保护（参考 SekiroMod：复活血量 = 最大血量×50%）：
+                        // 残血时刻的锚点回溯后等于立刻再死，回溯失去意义。
+                        // 锚点血量高于下限时保留锚点原值（位置/预览图仍精确对应锚点时刻）。
+                        float floored = Math.Max(anchor.Player.Health,
+                            main.Health.MaxHealth * ReviveHealthFloorRatio);
+                        main.Health.SetHealth(floored);
+                    }
                 }
 
                 // position 模式：已获得的物品不回溯（背包与装备槽都保持现状）
