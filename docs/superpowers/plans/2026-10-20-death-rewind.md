@@ -156,6 +156,7 @@ Expected: 打印 `fetched .../vendor/0Harmony.dll`，文件约 2.4 MB。
 ```
 
 > 目标框架选 `net472`：Unity 2022 的 Mono 运行时可直接加载 net472 程序集；Harmony 2.4.1 只提供 net35/net452/net472/net48/net5.0+ 构建，没有 netstandard2.0，用 `netstandard2.1` + `PackageReference` 会报 NU1202。
+> **运行时实测（2026-10-21）**：`Application.dataPath` 在本构建上是 `<app>/Contents`（不是 `Contents/Resources/Data`）——由 ModManager 扫描到的 Mods 根目录 `<app>/Contents/Mods` 反推确认。因此 Mod 配置目录是 `<app>/Contents/ModConfig/<ModName>/`，部署目录是 `<app>/Contents/Mods/<ModName>/`。
 
 - [ ] **Step 3: 创建 info.ini 与 preview.png**
 
@@ -1907,6 +1908,8 @@ namespace DeathRewind.Unity
 
 > 载荷统一用 **Base64 字符串**存入 ES3（不用 `byte[]` 重载，避免两种文件格式并存导致读错）。
 > `SavesSystem.GetFilePath(slot)` 是公开静态方法（规格 §3 已核实）。
+> **运行时实测**：`ES3Settings.location = ES3.Location.File` 时 `ES3.Save` **直接写盘**，之后再调用 `ES3.StoreCachedFile(path, settings)` 会抛 "could not be found in the cache"（文件不在缓存里）。因此写盘后**不要**再调 `StoreCachedFile`；一个键都没写时更不能调。
+> **运行时实测**：`LevelManager.LootBoxInventories` 是静态属性且内部解引用 `LevelManager.Instance`，在主菜单阶段（Instance 为 null）直接访问会抛 NullReferenceException。所有访问必须经 `Unity/LevelAccess.cs` 的安全包装（就绪判定 + try/catch），并以 `LevelAccess.LevelReady` 作为"可以建锚点/采样世界"的前提。
 
 - [ ] **Step 3: 编译验证**
 
