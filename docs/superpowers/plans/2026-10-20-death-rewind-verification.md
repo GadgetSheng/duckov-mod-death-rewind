@@ -42,23 +42,30 @@
 |---|---|---|
 | Mod 目录不被扫描 | macOS 上 `Application.dataPath` = `<app>/Contents`，不是 `Contents/Resources/Data` | 部署路径改为 `Contents/Mods/DeathRewind`（探针实验确认） |
 | 每帧 `NullReferenceException`（`LevelManager.get_LootBoxInventories`） | 该静态属性内部解引用 `LevelManager.Instance`，主菜单阶段为 null | 新增 `Unity/LevelAccess.cs` 统一安全访问 + `LevelReady` 判定 |
-| `锚点 N 落盘失败: could not be found in the cache` | `ES3Settings.location = File` 时 `ES3.Save` 直接写盘，额外的 `StoreCachedFile` 必然失败 | 移除 `StoreCachedFile` 调用；无键写入时直接跳过 |
+| `锚点 N 落盘失败: could not be found in the cache` | `ES3Settings.location = File` 时 `ES3.Save` 直接写盘，额外的 `StoreCachedFile` 必然失败 | 移除 `StoreCachedFile` 调用；无键写入时直接跳过；载荷改用自有格式（`key<TAB>base64`） |
 | `玩家背包载荷往返自检失败` | `InventoryData.FromInventory` 跳过空槽，而自检按 `Content.Count` 比较 | 自检改为按"非空物品数"比较 |
 | 配置路径错误 | 同上 dataPath 误判 | 改为 `Application.dataPath/ModConfig/DeathRewind/config.txt` |
 | 启动即建了一个无意义锚点 | 网格原点未在启动时设定，第一条边界落在 tick=0 | `OnAfterSetup` 即 `ResetGridTo(CurrentTick, CurrentTick)`；建锚点前要求 `LevelAccess.LevelReady` |
 | E6 反向复位会把 `dieTask` 置 true | 用 `_death.IsDead` 复位 | 改为复位为 `false`（拦截时原方法体被跳过，dieTask 从未被置位；置 true 会让重放永不执行 → 死亡流程卡死） |
+| **锚点里一条敌人数据都没有**（`world diff enemies=0`，怪物不复活） | 敌人筛选用 `Health.GetComponent<AICharacterController>()`，但敌人的 Health 与 AI 控制器**不在同一 GameObject** | 改为枚举 `AICharacterController` + `Health.TryGetCharacter()` 解析；敌人索敌目标与 `noticed` 一并入锚点 |
+| **敌人复活后没有装备** | `CharacterMainControl.OnDead` 把角色物品转成尸体箱 | 新增 `EnemyLootboxPatch`：敌人的物品不生成尸体箱（玩家的照常掉落） |
+| **复活后"无敌"、准星消失** | `Health.Hurt` 遇 `isDead=true` 直接返回 false；原生 `AimMarker.Update` 只在死亡时把准星 alpha 设 0，**从不设回 1** | 复活时强制激活玩家/Health/DamageReceiver 物体、`isDead=false`、`SetInvincible(false)`，并显式恢复 `AimMarker.rootCanvasGroup.alpha = 1`；新增 `revive sanity` 日志 |
+| 锚点构建主线程卡顿 | `SavesSystem.SaveFile()` 写 ~1 MB + 备份；容器全量序列化 | 主线程分帧采集（预算 2ms/帧）+ 后台线程纯文件 IO + 未变化容器复用载荷；实测 2690ms → 0–2ms |
 
 ## 待验证 ⏳
 
 需要真实关卡上下文（敌人 / 容器 / 存档）才能验证：
 
-- [ ] 死亡被拦截 → 冻结 → 面板出现 → 选"回退" → 玩家复活
-- [ ] 锚点选择正确（`anchor selected id=… age=…`）
+- [ ] 死亡面板出现**原生 YOU DIED 结算页 + 注入的回溯按钮**（已驱动原生界面，UI 与缩略图位置待目视确认）
+- [ ] 回溯按钮上方显示**锚点时刻的缩略图**
+- [ ] 锚点选择正确（`anchor selected id=… age=…`），进图不足 60s 时目标为**起点锚点**
 - [ ] 阶段 A–E 全部 `result=ok`，`rewind result=ok rewindCount=1`
-- [ ] 世界状态回滚（敌人复活 / 容器内容还原 / 门状态 / 世界时间）
+- [ ] 世界状态回滚：敌人复活（`world diff enemies=` 不再是 0）、**敌人装备还在**、容器内容还原、门状态、世界时间
+- [ ] 复活后准星恢复、玩家可被敌人正常伤害（查 `revive sanity` 日志）
 - [ ] 元系统回滚（EXP、任务进度回到锚点值）
 - [ ] 连续回退（回退后再次死亡仍可选更早锚点）
 - [ ] 耗尽降级（`no eligible anchor` / `rewind limit reached`）
+- [ ] 跨地图保护（切换地图后回溯历史被清空，无法回溯到上一张图）
 - [ ] 失败降级（`forceFailPhase=A..E` 各自注入，断言玩家仍死亡且元系统未变）
 
 自动化辅助开关（仅 `debugMode=true` 生效）：
