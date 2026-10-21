@@ -22,6 +22,7 @@ namespace DeathRewind
         private EntitySampler _sampler;
         private AnchorBuilder _builder;
         private WorldRestorer _restorer;
+        private AnchorBuildContext _pendingBuild;
         private double _nextSampleAt;
         private double? _levelStartTick;
         private bool _timeScaleOwned;
@@ -87,15 +88,29 @@ namespace DeathRewind
                 var due = _ring.PollDueGridTimestamp();
                 if (due.HasValue && LevelAccess.LevelReady)
                 {
-                    int id = _ring.AllocateId();
-                    var sw = Stopwatch.StartNew();
-                    var anchor = _builder.Build(id, _clock.CurrentTick, due.Value);
-                    sw.Stop();
-                    var evicted = new List<Anchor>();
-                    _ring.Insert(anchor, evicted);
-                    foreach (var old in evicted) _sampler.ReleaseAnchor(old);
-                    _sampler.SetAnchorCoverage(_ring.Anchors);
-                    Debug.Log($"[DeathRewind] anchor created id={anchor.Id} gridTs={anchor.GridTimestamp} absTs={anchor.AbsTimestamp} buildMs={sw.ElapsedMilliseconds}");
+                    _pendingBuild = _builder.BeginBuild(_ring.AllocateId(), _clock.CurrentTick, due.Value);
+                }
+            }
+
+            // 推进正在进行的锚点构建：采集分帧进行，文件 IO 在后台线程
+            if (_pendingBuild != null)
+            {
+                if (!_pendingBuild.CaptureDone)
+                {
+                    if (_builder.ContinueCapture(_pendingBuild)) _builder.StartIo(_pendingBuild);
+                }
+                else if (_builder.IsIoCompleted(_pendingBuild))
+                {
+                    var anchor = _builder.CompleteBuild(_pendingBuild);
+                    _pendingBuild = null;
+                    if (anchor != null)
+                    {
+                        var evicted = new List<Anchor>();
+                        _ring.Insert(anchor, evicted);
+                        foreach (var old in evicted) _sampler.ReleaseAnchor(old);
+                        _sampler.SetAnchorCoverage(_ring.Anchors);
+                        Debug.Log($"[DeathRewind] anchor created id={anchor.Id} gridTs={anchor.GridTimestamp} absTs={anchor.AbsTimestamp}");
+                    }
                 }
             }
 
@@ -116,6 +131,8 @@ namespace DeathRewind
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _store.Clear();
             _sampler.ResetRegistry();
+            _builder?.ResetCache();
+            _pendingBuild = null;
             _nextSampleAt = _clock.CurrentTick;
             _levelStartTick = _clock.CurrentTick;
             Debug.Log($"[DeathRewind] level started: anchors/rewindCount/store reset at tick={_clock.CurrentTick}");

@@ -22,6 +22,10 @@ namespace DeathRewind.Config
         public bool LogVerbose;
         /// <summary>调试用：进入关卡 N 秒后自动触发一次自身死亡（0 = 关闭）。仅 debugMode 生效。</summary>
         public double DebugAutoDeathAfter = 0;
+        /// <summary>锚点采集时每帧最多处理多少个容器（分帧摊开，避免单帧长耗时）。</summary>
+        public int AnchorCaptureBatchSize = 2;
+        /// <summary>锚点采集的单帧时间预算（毫秒），超出即停到下一帧。</summary>
+        public double AnchorCaptureBudgetMs = 2;
 
         // macOS 实测：Application.dataPath = <app>/Contents（ModManager 扫描 <app>/Contents/Mods 可证），
         // 因此 Mod 配置目录是 <app>/Contents/ModConfig/<ModName>/（与游戏现有 ModConfig 目录一致）。
@@ -57,6 +61,8 @@ namespace DeathRewind.Config
                 cfg.ForceFailPhase = GetString(raw, "forceFailPhase", cfg.ForceFailPhase);
                 cfg.LogVerbose = GetBool(raw, "logVerbose", cfg.LogVerbose);
                 cfg.DebugAutoDeathAfter = GetDouble(raw, "debugAutoDeathAfter", cfg.DebugAutoDeathAfter);
+                cfg.AnchorCaptureBatchSize = GetInt(raw, "anchorCaptureBatchSize", cfg.AnchorCaptureBatchSize);
+                cfg.AnchorCaptureBudgetMs = GetDouble(raw, "anchorCaptureBudgetMs", cfg.AnchorCaptureBudgetMs);
             }
             cfg.Validate();
             return cfg;
@@ -68,6 +74,8 @@ namespace DeathRewind.Config
             if (AnchorCount < 2) { Debug.LogWarning("[DeathRewind] anchorCount 非法，回落 4"); AnchorCount = 4; }
             if (MaxRewinds < 1) { Debug.LogWarning("[DeathRewind] maxRewinds 非法，回落 3"); MaxRewinds = 3; }
             if (SampleInterval <= 0) { Debug.LogWarning("[DeathRewind] sampleInterval 非法，回落 0.25"); SampleInterval = 0.25; }
+            if (AnchorCaptureBatchSize < 1) { Debug.LogWarning("[DeathRewind] anchorCaptureBatchSize 非法，回落 2"); AnchorCaptureBatchSize = 2; }
+            if (AnchorCaptureBudgetMs <= 0) { Debug.LogWarning("[DeathRewind] anchorCaptureBudgetMs 非法，回落 2"); AnchorCaptureBudgetMs = 2; }
             if (MinRewindAge > AnchorCount * AnchorInterval)
             {
                 Debug.LogWarning($"[DeathRewind] minRewindAge({MinRewindAge}) > anchorCount*anchorInterval({AnchorCount * AnchorInterval})，回退将永远不可用，回落");
