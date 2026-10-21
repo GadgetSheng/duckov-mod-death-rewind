@@ -19,6 +19,22 @@
 | 8 | 关卡生命周期事件 | `[DeathRewind] level started: anchors/rewindCount/store reset at tick=…`、`[DeathRewind] subscene loaded: anchors=0 rewindCount=0`、`[DeathRewind] level ended: state cleared` | 通过 |
 | 9 | 锚点生成 | `[DeathRewind] anchor created id=1 gridTs=76.79 absTs=76.80 buildMs=24`；落盘 `ModRewind/anchor_1.es3`（8.5 KB）+ `ModRewind/save_1.sav`（926 KB） | 通过 |
 | 10 | 配置读取 | `[DeathRewind] config path: …/Contents/ModConfig/DeathRewind/config.txt` | 通过 |
+| 11 | 锚点构建耗时（实测） | 同一局内连续 20+ 个锚点：`buildMs` 稳定在 **24–42 ms**；但**冷启动第一个锚点 2690 ms**（创建 ES3 文件 + 首次主存档落盘 + 全量容器序列化） | 尖峰已定位 |
+| 12 | 降级路径（无合格锚点） | 玩家死亡时锚点年龄不足 → `[DeathRewind] no eligible anchor` → 游戏走正常死亡流程（不卡死、不吞死亡） | 通过 |
+
+## 性能改造（响应"游戏内存储明显卡顿"）
+
+| 项 | 改造前 | 改造后 |
+|---|---|---|
+| 主线程重 IO | `SavesSystem.SaveFile()` 写 ~1 MB 主存档 + 生成备份 | 完全移除（仅在真正回退的阶段 A 执行一次） |
+| 容器背包序列化 | 一帧内全部容器 | 分帧摊开：每帧 ≤ `anchorCaptureBatchSize` 个、预算 `anchorCaptureBudgetMs` ms |
+| 载荷落盘 | ES3 写盘（主线程） | 后台线程 + 自有格式（`key<TAB>base64`，先写 tmp 再原子改名） |
+| 主存档副本 | 主线程 `File.Copy` | 后台线程复制 + 长度校验（不一致重试一次，失败则该锚点不可用 → 自动降级） |
+| 重复工作 | 每轮全量重新序列化所有容器 | 内容指纹比对，未被动过的容器复用上次载荷 |
+
+线程安全取舍：后台线程**不调用任何 Unity / 游戏 API**；载荷不再用 ES3（其静态缓存在多线程下不安全）。
+
+元系统语义变化：锚点的元系统快照 = 游戏自己**最后一次落盘**的主存档（后台线程复制），不再强制在锚点时刻落盘。差别仅在于"锚点时刻与游戏上次落盘之间的 EXP/任务变更不会被回退"，与游戏崩溃后读档的结果一致。
 
 ## 运行时发现并已修复的缺陷
 

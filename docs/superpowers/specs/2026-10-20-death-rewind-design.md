@@ -241,7 +241,7 @@ flowchart LR
   - 判定"是否跨过网格边界"→ 返回**待构建锚点时刻**（`AbsTimestamp`、`GridTimestamp`）；
   - 收到构建完成的锚点后**入环**；入环时若超出 `anchorCount`，**挤出最老锚点**并把挤出列表返回给 Unity 侧（用于释放停用敌人）。
 - `AnchorBuilder`（Unity 侧）**只负责按指定时刻构建锚点内容**：
-  1. **元系统刷新**：`SavesSystem.CollectSaveData()` + `SavesSystem.SaveFile()`（让主存档反映锚点时刻的 EXP/任务/经济；副作用是刷新游戏自身的 `.bac` 备份，与游戏在 UI 开关时做的事一致）。`LevelManager.SaveMainCharacter()` 是 `internal`，Mod 无法调用 → 玩家数据由本 Mod 自己的背包快照负责（§5.3）。
+  1. **元系统刷新**：`（实现已调整）元系统快照改为**后台线程复制游戏自己最后一次落盘的主存档**，不再在主线程调用 `SavesSystem.SaveFile()`（那是卡顿主因：单次 ~1 MB 写盘 + 备份，实测 2.6 秒）。语义差别：锚点时刻与游戏上次落盘之间的元系统变更不会被回退，与游戏崩溃后读档的结果一致。`LevelManager.SaveMainCharacter()` 是 `internal`，Mod 无法调用 → 玩家数据由本 Mod 自己的背包快照负责（§5.3）。
   2. 实时状态字典的**内存深拷贝**（每 `sampleInterval` 一次更新，锚点时刻取快照）。
   3. 容器/背包的 ES3 写入（`<persistentDataPath>/ModRewind/anchor_{Id}.es3`）。
   4. 主存档文件拷贝（`<persistentDataPath>/ModRewind/save_{Id}.sav`）。
