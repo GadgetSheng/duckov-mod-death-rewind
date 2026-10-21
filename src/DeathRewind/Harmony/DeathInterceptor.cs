@@ -10,7 +10,6 @@ using Duckov.UI;
 using Duckov.Scenes;
 using HarmonyLib;
 using HarmonyLibHarmony = HarmonyLib.Harmony;
-using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -239,31 +238,32 @@ namespace DeathRewind.Harmony
                 Debug.LogWarning($"[DeathRewind] continueBtn 等待超时（{wait:0.0}s）仍未亮出，尝试强制激活");
             if (!continueBtn.gameObject.activeSelf) continueBtn.gameObject.SetActive(true);
 
-            var rewindBtn = CreateRewindButtonClone(continueBtn, $"回溯 {ageSeconds:0} 秒");
-            Debug.Log($"[DeathRewind] 回溯按钮注入: {(rewindBtn != null ? "ok" : "failed")} (view={view != null} contBtn={continueBtn != null} wait={wait:0.0}s)");
-            UnityEngine.UI.RawImage previewImage = null;
-            TextMeshProUGUI hintText = null;
-            if (rewindBtn != null)
+            // 注入控件组：原生"继续"按钮 + 回溯按钮并排一行，白色提示文字与箭头在回溯按钮上方，
+            // 锚点缩略图在按钮行下方（行合并后腾出的竖向空间全部给图片）。
+            var panel = ClosurePanel.Create(view.transform, continueBtn, $"回溯 {ageSeconds:0} 秒", anchor.PreviewPng);
+            Debug.Log($"[DeathRewind] 回溯控件注入: {(panel != null ? "ok" : "failed")} " +
+                      $"(view={view != null} contBtn={continueBtn != null} wait={wait:0.0}s preview={(panel != null && panel.HasPreview ? "ok" : "none")})");
+            if (panel == null)
             {
-                rewindBtn.onClick.AddListener(() => { _rewindClicked = true; });
-                previewImage = CreatePreviewImage(rewindBtn, anchor.PreviewPng);
-                hintText = CreateHintText(rewindBtn);
-                if (previewImage == null)
-                    Debug.LogWarning("[DeathRewind] 锚点缩略图不可用（未抓到画面）");
+                Debug.LogWarning("[DeathRewind] 回溯控件注入失败，只能选择继续（接受死亡）");
             }
             else
             {
-                Debug.LogWarning("[DeathRewind] 回溯按钮注入失败，只能选择继续（接受死亡）");
+                panel.RewindButton.onClick.AddListener(() => { _rewindClicked = true; });
+                if (!panel.HasPreview)
+                    Debug.LogWarning("[DeathRewind] 锚点缩略图不可用（未抓到画面）");
             }
 
             // 等待玩家裁决：点回溯按钮，或点原生"继续"（showTask 完成）
             while (!_rewindClicked && showTask.Status == UniTaskStatus.Pending && _choiceGeneration == gen)
+            {
+                // 原生按钮可能被布局组件重排或被 Punch 动画缩放，每帧重新对齐整组控件
+                panel?.Layout();
                 yield return null;
-            if (_choiceGeneration != gen) yield break;
+            }
+            if (_choiceGeneration != gen) { panel?.Dispose(); yield break; }
 
-            if (rewindBtn != null) UnityEngine.Object.Destroy(rewindBtn.gameObject);
-            if (previewImage != null) UnityEngine.Object.Destroy(previewImage.gameObject);
-            if (hintText != null) UnityEngine.Object.Destroy(hintText.gameObject);
+            panel?.Dispose();
 
             if (!_rewindClicked)
             {
@@ -300,133 +300,6 @@ namespace DeathRewind.Harmony
 
             if (rewind) yield return RestoreRoutine(anchor);
             else AcceptDeath();
-        }
-
-        /// <summary>在回溯按钮上方放一张"锚点时刻"的缩略图，让玩家看清要回到哪里。</summary>
-        private static UnityEngine.UI.RawImage CreatePreviewImage(Button rewindBtn, byte[] png)
-        {
-            if (rewindBtn == null || png == null || png.Length == 0) return null;
-            try
-            {
-                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                if (!tex.LoadImage(png)) { UnityEngine.Object.Destroy(tex); return null; }
-
-                var go = new GameObject("DeathRewind_Preview", typeof(RectTransform), typeof(UnityEngine.UI.RawImage));
-                var btnRect = rewindBtn.GetComponent<RectTransform>();
-                go.transform.SetParent(btnRect != null ? btnRect.parent : rewindBtn.transform, false);
-                var img = go.GetComponent<UnityEngine.UI.RawImage>();
-                img.texture = tex;
-                img.raycastTarget = false;   // 缩略图与展示框同为 16:9，无拉伸
-
-                const float previewW = 480f, previewH = 270f;   // 16:9，与缩略图一致
-                var rect = go.GetComponent<RectTransform>();
-                rect.sizeDelta = new Vector2(previewW, previewH);
-                if (btnRect != null)
-                {
-                    // 放到回溯按钮正下方，留 16px 间距
-                    rect.anchoredPosition = btnRect.anchoredPosition
-                                            - new Vector2(0f, btnRect.rect.height * 0.5f + previewH * 0.5f + 16f);
-                }
-                return img;
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[DeathRewind] 缩略图注入失败: {e.Message}");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// "一次机会！"手写批注：字体参考死亡界面上方的大字（如 UGLY 标题），白色，放在回溯按钮
-        /// 右侧，视觉上指向按钮。找不到参考字体时回退 TMP 默认字体。
-        /// </summary>
-        private static TextMeshProUGUI CreateHintText(Button rewindBtn)
-        {
-            if (rewindBtn == null) return null;
-            try
-            {
-                // 在整个结算界面里找参考文字：优先文本含 "UGLY" 的，否则取字号最大的
-                var canvas = rewindBtn.transform.root;
-                var all = canvas.GetComponentsInChildren<TextMeshProUGUI>(true);
-                TextMeshProUGUI reference = null;
-                foreach (var t in all)
-                {
-                    if (t.text != null && t.text.IndexOf("UGLY", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        reference = t;
-                        break;
-                    }
-                }
-                if (reference == null)
-                {
-                    float best = 0f;
-                    foreach (var t in all)
-                    {
-                        if (t.fontSize > best && t.isActiveAndEnabled) { best = t.fontSize; reference = t; }
-                    }
-                }
-
-                var go = new GameObject("DeathRewind_Hint", typeof(RectTransform));
-                var btnRect = rewindBtn.GetComponent<RectTransform>();
-                go.transform.SetParent(btnRect != null ? btnRect.parent : rewindBtn.transform, false);
-                var tmp = go.AddComponent<TextMeshProUGUI>();
-                tmp.text = "一次机会！";
-                tmp.color = Color.white;
-                tmp.fontSize = 48f;
-                tmp.enableWordWrapping = false;
-                tmp.alignment = TextAlignmentOptions.Center;
-                tmp.raycastTarget = false;
-                if (reference != null)
-                {
-                    tmp.font = reference.font;                       // 手写/涂鸦风格与原生大字一致
-                    tmp.fontSharedMaterial = reference.fontSharedMaterial;
-                }
-
-                // 放在回溯按钮右侧同一行，紧邻按钮形成"指向"关系
-                var rect = go.GetComponent<RectTransform>();
-                rect.sizeDelta = new Vector2(300f, 72f);
-                if (btnRect != null)
-                    rect.anchoredPosition = btnRect.anchoredPosition
-                                            + new Vector2(btnRect.rect.width * 0.5f + 170f, 0f);
-                return tmp;
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning($"[DeathRewind] 提示文字注入失败: {e.Message}");
-                return null;
-            }
-        }
-
-        /// <summary>克隆原生"继续"按钮作为回溯按钮（继承原生样式），返回其 Button 组件。</summary>
-        private static Button CreateRewindButtonClone(Button continueBtn, string label)
-        {
-            try
-            {
-                var cloneObj = UnityEngine.Object.Instantiate(continueBtn.gameObject, continueBtn.transform.parent);
-                cloneObj.name = "DeathRewind_RewindButton";
-
-                var btn = cloneObj.GetComponent<Button>();
-                if (btn == null)
-                {
-                    UnityEngine.Object.Destroy(cloneObj);
-                    return null;
-                }
-                btn.onClick.RemoveAllListeners();
-
-                var tmp = cloneObj.GetComponentInChildren<TextMeshProUGUI>(true);
-                if (tmp != null) tmp.text = label;
-
-                // 往下挪避开原生"继续"按钮（父节点若有布局组件会自动重排）
-                var rect = cloneObj.GetComponent<RectTransform>();
-                if (rect != null) rect.anchoredPosition -= new Vector2(0f, rect.sizeDelta.y + 24f);
-
-                return btn;
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[DeathRewind] 创建回溯按钮失败: {e}");
-                return null;
-            }
         }
 
         private static void AcceptDeath()
