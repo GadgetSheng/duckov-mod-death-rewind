@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using ItemStatsSystem;
+using Duckov.Scenes;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -8,14 +9,31 @@ namespace DeathRewind.Unity
 {
     /// <summary>
     /// 关卡数据的**安全**访问入口。
-    /// <para>
-    /// <c>LevelManager.LootBoxInventories</c> 是静态属性，其内部会解引用 <c>LevelManager.Instance</c>；
     /// 在主菜单 / 关卡尚未初始化时 Instance 为 null，直接访问会抛 NullReferenceException。
     /// 本类统一做就绪判定与异常兜底，调用方无需再自行判断。
-    /// </para>
     /// </summary>
     public static class LevelAccess
     {
+        private static readonly System.Reflection.FieldInfo IsLoadingField =
+            typeof(MultiSceneCore).GetField("isLoading",
+                System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Public);
+
+        /// <summary>游戏自身的场景加载门（黑屏/子场景切换期间为 true）。类型不可用时返回 false。</summary>
+        public static bool MultiSceneLoading
+        {
+            get
+            {
+                try
+                {
+                    var core = MultiSceneCore.Instance;
+                    return core != null && IsLoadingField?.GetValue(core) is bool b && b;
+                }
+                catch { return false; }
+            }
+        }
+
         /// <summary>关卡是否已初始化（Instance 存在且 LevelInited 为真）。</summary>
         public static bool LevelReady
         {

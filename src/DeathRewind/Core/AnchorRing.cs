@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace DeathRewind.Core
@@ -9,10 +10,10 @@ namespace DeathRewind.Core
     public sealed class AnchorRing
     {
         private readonly List<Anchor> _anchors = new List<Anchor>();
-        private readonly int _capacity;
-        private readonly double _minAge;
-        private readonly int _maxRewinds;
-        private readonly double _gridInterval;
+        private int _capacity;
+        private double _minAge;
+        private int _maxRewinds;
+        private double _gridInterval;
 
         private double _gridOrigin;      // 网格原点（网格时间戳）
         private double _tickAtOrigin;    // 原点对应的有效 tick
@@ -34,6 +35,19 @@ namespace DeathRewind.Core
         public double GridTimestamp => _gridOrigin + (_currentTick - _tickAtOrigin);
 
         public void SetTick(double currentTick) => _currentTick = currentTick;
+
+        /// <summary>
+        /// 运行时更新环参数（游戏内设置变更时调用）：保留已存锚点，仅调整容量/阈值/网格间隔，
+        /// 并把下一条网格边界重置为"当前网格时间 + 新间隔"。
+        /// </summary>
+        public void Reconfigure(int capacity, double minAge, int maxRewinds, double gridInterval)
+        {
+            _capacity = capacity;
+            _minAge = minAge;
+            _maxRewinds = maxRewinds;
+            _gridInterval = gridInterval;
+            _nextBoundary = GridTimestamp + gridInterval;
+        }
 
         /// <summary>把网格时间线原点重置为给定网格时间戳（关卡开始或回退后调用）。</summary>
         public void ResetGridTo(double gridTimestamp, double currentTick)
@@ -72,8 +86,8 @@ namespace DeathRewind.Core
             return anchor;
         }
 
-        /// <summary>年龄达标且未被用作恢复目标的锚点中，时间最新的一个。</summary>
-        public Anchor SelectTarget()
+        /// <summary>年龄达标且未被用作恢复目标的锚点中，时间最新的一个；sceneKey 非空时只考虑该场景的锚点（子场景坐标系互不通用）。</summary>
+        public Anchor SelectTarget(string sceneKey)
         {
             Anchor best = null;
             for (int i = 0; i < _anchors.Count; i++)
@@ -81,10 +95,13 @@ namespace DeathRewind.Core
                 var a = _anchors[i];
                 if (a.Consumed) continue;
                 if (CurrentTick - a.AbsTimestamp < _minAge) continue;
+                if (sceneKey != null && !string.Equals(a.SceneKey, sceneKey, StringComparison.Ordinal)) continue;
                 if (best == null || a.AbsTimestamp > best.AbsTimestamp) best = a;
             }
             return best;
         }
+
+        public Anchor SelectTarget() => SelectTarget(null);
 
         public bool CanRewind() => RewindCount < _maxRewinds && SelectTarget() != null;
 

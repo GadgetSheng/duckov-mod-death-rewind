@@ -25,12 +25,19 @@ namespace DeathRewind.Unity
                     var small = new Texture2D(width, height, TextureFormat.RGB24, false);
                     try
                     {
-                        // 使用 ReadPixels 替代 Graphics.Blit（后者要求 RenderTexture）
+                        // GPU 完成中心裁剪 + 缩放：Blit 的 scale/offset 指定源纹理上 16:9 的中心窗口，
+                        // 目标 RT 就是缩略图尺寸 → ReadPixels 只读 width×height 像素（1:1 整块拷贝）
+                        float srcW = full.width, srcH = full.height;
+                        float cropW = srcW, cropH = srcW * height / width;
+                        if (cropH > srcH) { cropH = srcH; cropW = srcH * width / height; }
+                        var scale = new Vector2(cropW / srcW, cropH / srcH);
+                        var offset = new Vector2((srcW - cropW) / (2f * srcW), (srcH - cropH) / (2f * srcH));
+
                         var prevActive = RenderTexture.active;
-                        var rt = RenderTexture.GetTemporary(full.width, full.height);
-                        Graphics.Blit(full, rt);
+                        var rt = RenderTexture.GetTemporary(width, height, 0);
+                        Graphics.Blit(full, rt, scale, offset);
                         RenderTexture.active = rt;
-                        small.ReadPixels(new Rect(0, 0, full.width, full.height), 0, 0);
+                        small.ReadPixels(new Rect(0, 0, width, height), 0, 0);
                         small.Apply(false);
                         RenderTexture.active = prevActive;
                         RenderTexture.ReleaseTemporary(rt);

@@ -76,13 +76,18 @@ namespace DeathRewind.Unity
             _worldState = "before";
 
             if (!PhaseA(anchor)) return false;                       // A 失败：什么都没改，直接放弃回退
-            if (!PhaseB(anchor)) { await PhaseFAsync(anchor); return false; }
-            if (!await PhaseCAsync(anchor)) { await PhaseFAsync(anchor); return false; }
-            if (!await PhaseDAsync(anchor)) { await PhaseFAsync(anchor); return false; }
+            bool full = IsFullScope();
+            // position 模式：只回溯玩家位置（物品与敌人不回溯），跳过 B/C/D 三个世界级阶段
+            if (full)
+            {
+                if (!PhaseB(anchor)) { await PhaseFAsync(anchor); return false; }
+                if (!await PhaseCAsync(anchor)) { await PhaseFAsync(anchor); return false; }
+                if (!await PhaseDAsync(anchor)) { await PhaseFAsync(anchor); return false; }
+            }
             if (!await PhaseEAsync(anchor)) { await PhaseE6Async(); await PhaseFAsync(anchor); return false; }
 
             // 成功收尾：实时状态整体替换为锚点状态（规格 §6.7）
-            _store.ReplaceFrom(anchor);
+            if (full) _store.ReplaceFrom(anchor);
             _worldState = "anchor";
             LogPlayerState();
             LogWorldDiff();
@@ -91,6 +96,9 @@ namespace DeathRewind.Unity
             DumpPostState();
             return true;
         }
+
+        /// <summary>是否完整世界回滚（position 模式只回溯玩家位置）。</summary>
+        private bool IsFullScope() => string.Equals(_config.RewindScope, "full", System.StringComparison.OrdinalIgnoreCase);
 
         /// <summary>统一超时包装：超时只是"判定失败"的触发条件，返回 false 表示该阶段失败。</summary>
         private static async Task<bool> WithTimeout(Task<bool> work, double seconds, string phase)
@@ -118,18 +126,25 @@ namespace DeathRewind.Unity
             {
                 if (ForceFail("A")) throw new InvalidOperationException("forced failure at A");
 
-                // 1) 先刷新存档，使"回退前状态" = 磁盘 + 内存双侧一致态
-                SavesSystem.CollectSaveData();
-                SavesSystem.SaveFile();
+                bool full = IsFullScope();
+                if (full)
+                {
+                    // 1) 先刷新存档，使"回退前状态" = 磁盘 + 内存双侧一致态
+                    SavesSystem.CollectSaveData();
+                    SavesSystem.SaveFile();
 
-                // 2) 备份主存档（路径留作字段，供阶段 B 失败与阶段 F 回滚）
-                _backupPath = _meta.BackupCurrent();
-                if (string.IsNullOrEmpty(_backupPath) || !File.Exists(_backupPath))
-                    throw new IOException("主存档备份失败");
+                    // 2) 备份主存档（路径留作字段，供阶段 B 失败与阶段 F 回滚）
+                    _backupPath = _meta.BackupCurrent();
+                    if (string.IsNullOrEmpty(_backupPath) || !File.Exists(_backupPath))
+                        throw new IOException("主存档备份失败");
+                }
 
-                // 3) 采集回退前世界快照
-                _pre = CapturePreRewindSnapshot();
-                DumpPreState();
+                // 3) 采集回退前世界快照（position 模式不需要：世界不会被改动）
+                if (full)
+                {
+                    _pre = CapturePreRewindSnapshot();
+                    DumpPreState();
+                }
 
                 // 4) 校验锚点载荷可解析
                 foreach (var kv in anchor.Containers)
@@ -140,7 +155,8 @@ namespace DeathRewind.Unity
                 }
                 if (anchor.Player?.BagPayload != null && InventoryPayload.Parse(anchor.Player.BagPayload) == null)
                     throw new InvalidOperationException("锚点玩家背包载荷无法解析");
-                if (string.IsNullOrEmpty(anchor.MainSaveCopyPath) || !File.Exists(anchor.MainSaveCopyPath))
+                // 主存档副本只在完整回滚（full）模式下存在；position 模式锚点不回滚元系统，无副本文件
+                if (full && (string.IsNullOrEmpty(anchor.MainSaveCopyPath) || !File.Exists(anchor.MainSaveCopyPath)))
                     throw new FileNotFoundException("锚点主存档副本缺失", anchor.MainSaveCopyPath ?? "<null>");
 
                 ok = true;
@@ -535,6 +551,13 @@ namespace DeathRewind.Unity
         {
             if (h == null) return;
             h.gameObject.SetActive(true);
+            // Health 挂在子物体上：角色根物体也要一起激活，否则敌人"活着但不可见/不可交互"
+            try
+            {
+                var character = h.TryGetCharacter();
+                if (character != null) character.gameObject.SetActive(true);
+            }
+            catch { /* 忽略 */ }
             SetBoolField(h, "isDead", false);
             // 死亡流程会把 hasHandledDeath 置 true（OnDead 只执行一次），
             // 复活时必须复位，否则敌人无法重新进入正常战斗状态（不能攻击）。
@@ -670,6 +693,9 @@ namespace DeathRewind.Unity
                     if (main.Health != null) main.Health.SetHealth(anchor.Player.Health);
                 }
 
+                // position 模式：已获得的物品不回溯（背包与装备槽都保持现状）
+                if (IsFullScope())
+                {
                 var bag = main.CharacterItem?.Inventory;
                 byte[] payload = anchor.Player?.BagPayload;
                 if (bag != null && payload != null)
@@ -687,6 +713,8 @@ namespace DeathRewind.Unity
                     bool slotsOk = await WithTimeout(InventoryPayload.ApplySlotsAsync(slots, main.CharacterItem), PhaseTimeoutSeconds, "E2");
                     if (!slotsOk) Debug.LogWarning("[DeathRewind] 玩家装备槽还原不完整（非致命）");
                 }
+                }   // end if (IsFullScope())
+
                 ok = true;
             }
             catch (Exception e)
@@ -786,8 +814,13 @@ namespace DeathRewind.Unity
             try
             {
                 if (main.Health != null) main.Health.gameObject.SetActive(true);
-                var receiver = main.GetComponent<DamageReceiver>() ?? main.GetComponentInChildren<DamageReceiver>();
+                // 死亡流程 DamageReceiver.OnDead 会把接收器整个 GameObject SetActive(false)；
+                // 它是失活的子物体，GetComponentInChildren 默认找不到 → 必须优先用公开字段直接引用
+                var receiver = main.mainDamageReceiver
+                    ?? main.GetComponent<DamageReceiver>()
+                    ?? main.GetComponentInChildren<DamageReceiver>(true);
                 if (receiver != null) receiver.gameObject.SetActive(true);
+                ResetPlayerCombatState(main);
                 main.gameObject.SetActive(true);
 
                 var aim = UnityEngine.Object.FindFirstObjectByType<AimMarker>();
@@ -796,11 +829,78 @@ namespace DeathRewind.Unity
                 var h = main.Health;
                 Debug.Log($"[DeathRewind] revive sanity: hp={h?.CurrentHealth} isDead={h?.IsDead} invincible={h?.Invincible} " +
                           $"playerActive={main.gameObject.activeSelf} healthActive={h?.gameObject.activeSelf} " +
+                          $"receiverActive={(receiver != null && receiver.gameObject.activeSelf)} " +
                           $"crosshair={(aim != null && aim.rootCanvasGroup != null ? aim.rootCanvasGroup.alpha : -1f)}");
             }
             catch (Exception e)
             {
                 Debug.LogWarning($"[DeathRewind] 复活表现层恢复失败: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 战斗状态深度复位（参考创意工坊 SekiroMod「只狼mod」已验证的复活实践）：
+        /// ① hidden/Show：CharacterMainControl.hidden=true 时 AI 视野直接看不见玩家；
+        /// ② 队伍：AI 用 Team 校验索敌目标，死亡流程可能篡改 → 强制回 player；
+        /// ③ 碰撞体重注册：接收器 GO 复活后 Unity 物理可能仍视为旧体 → 全部子 Collider
+        ///    enable 翻转 + isTrigger=false + layer=DamageReceiver（DuckovHider 在我们的
+        ///    拦截流里不会触发，无需处理）；
+        /// ④ 刚体清速：防止复活瞬间带着死亡残留速度漂移。
+        /// </summary>
+        private static void ResetPlayerCombatState(CharacterMainControl main)
+        {
+            try
+            {
+                // ① AI 视野与显隐
+                typeof(CharacterMainControl).GetField("hidden", BindingFlags.Instance | BindingFlags.NonPublic)
+                    ?.SetValue(main, false);
+                try { main.Show(); }
+                catch { /* Show 在部分场景可能不可用，失败不影响其余复位 */ }
+
+                // ② 队伍（Health.team 是 public 字段）
+                try { main.SetTeam(Teams.player); }
+                catch { /* SetTeam 不可用则依赖下面直接赋值 */ }
+                var health = main.Health;
+                if (health != null) health.team = Teams.player;
+
+                // ③ 接收器深度复位：组件启用翻转 + 层重置 + 调用原生 Reset（若存在）
+                var receiver = main.mainDamageReceiver;
+                if (receiver != null)
+                {
+                    receiver.enabled = false;
+                    receiver.enabled = true;
+                    int layerId = LayerMask.NameToLayer("DamageReceiver");
+                    if (layerId >= 0) receiver.gameObject.layer = layerId;
+                    typeof(DamageReceiver).GetMethod("Reset", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                        ?.Invoke(receiver, null);
+                }
+
+                // ③' 全部子碰撞体重注册（CharacterController 除外；参考 SekiroMod：全翻非触发器）
+                int layer = LayerMask.NameToLayer("DamageReceiver");
+                foreach (var col in main.GetComponentsInChildren<Collider>(true))
+                {
+                    if (col is CharacterController) continue;
+                    col.enabled = false;
+                    col.enabled = true;
+                    col.isTrigger = false;
+                    if (layer >= 0) col.gameObject.layer = layer;
+                    if (col is MeshCollider mesh) mesh.convex = true;
+                }
+
+                // ④ 刚体清速
+                foreach (var rb in main.GetComponentsInChildren<Rigidbody>(true))
+                {
+                    if (rb.isKinematic) continue;
+                    rb.velocity = Vector3.zero;
+                    rb.angularVelocity = Vector3.zero;
+                }
+                try { main.SetForceMoveVelocity(Vector3.zero); }
+                catch { /* movementControl 不可用则跳过 */ }
+                Physics.SyncTransforms();
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DeathRewind] 战斗状态深度复位失败: {e.Message}");
             }
         }
 
@@ -908,6 +1008,13 @@ namespace DeathRewind.Unity
 
         private async Task<bool> PhaseFAsync(Anchor anchor)
         {
+            // position 模式：世界与元系统都没被改动，无需补偿（只需保证玩家状态由 E6 复位）
+            if (!IsFullScope())
+            {
+                Log(RestorePhase.F, "compensated");
+                return true;
+            }
+
             // 磁盘优先回滚
             bool diskOk = RollbackDisk();
 

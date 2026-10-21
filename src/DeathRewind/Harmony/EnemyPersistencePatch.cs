@@ -1,3 +1,4 @@
+using System;
 using DeathRewind.Unity;
 using HarmonyLib;
 using HarmonyLibHarmony = HarmonyLib.Harmony;
@@ -36,7 +37,21 @@ namespace DeathRewind.Harmony
         private static bool Prefix(Health __instance)
         {
             if (__instance == null) return true;
-            if (!EntitySampler.IsEnemyCharacter(__instance)) return true;
+            if (__instance.IsMainCharacterHealth) return true;
+            bool isEnemy = EntitySampler.IsEnemyCharacter(__instance);
+            if (!isEnemy) return true;
+            // Health 组件挂在角色的**子物体**上：原生 Health.Hurt 只停用子物体，角色本体仍然可见。
+            // 我们接管了销毁（不让它消失），若不额外停用角色本体，敌人就会变成"倒在地上不死不消"的样子。
+            try
+            {
+                var character = __instance.TryGetCharacter();
+                if (character != null && character.gameObject.activeSelf)
+                    character.gameObject.SetActive(false);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DeathRewind] 停用死亡敌人角色失败: {e.Message}");
+            }
             _sampler?.RegisterDeadEnemy(__instance);
             return false;
         }

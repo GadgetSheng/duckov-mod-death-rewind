@@ -111,23 +111,26 @@ namespace DeathRewind.Harmony
         }
 
         /// <summary>
-        /// 回溯目标选择：进图时间不足回溯窗口长度时，回退到"进图那一刻"的状态；
-        /// 否则按锚点年龄规则选最新且年龄达标的锚点。
+        /// 回溯目标选择：优先当前场景内年龄达标的最年轻锚点（子场景锚点互不可见）；
+        /// 当前场景内没有则回退到"进入该场景那一刻"的起点锚点（进图不足窗口长度 / 刚进楼层地道就死）。
         /// </summary>
         private static Anchor SelectTargetWithLevelStartFallback(AnchorRing ring)
         {
-            double levelElapsed = _owner.CurrentTick - _owner.LevelStartTick;
-            if (levelElapsed < _config.MinRewindAge)
+            var owner = _owner;
+            if (owner == null) return null;
+            string sceneKey = LevelAccess.CurrentSceneKey;
+            var anchor = ring.SelectTarget(sceneKey);
+            if (anchor != null) return anchor;
+
+            var start = owner.GetLevelStartAnchor(sceneKey);
+            // 刚进该场景就死（起点锚点年龄 <2s）→ 回溯等于原地复活，无意义，按无锚点处理
+            if (start == null || owner.CurrentTick - start.AbsTimestamp < 2)
             {
-                var start = _owner.LevelStartAnchor;
-                if (start != null)
-                {
-                    Debug.Log($"[DeathRewind] 进图仅 {levelElapsed:0}s（< {_config.MinRewindAge:0}s），回溯目标取起点锚点 id={start.Id}");
-                    return start;
-                }
-                Debug.Log($"[DeathRewind] 进图仅 {levelElapsed:0}s，但起点锚点不可用");
+                Debug.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点且起点锚点不可用");
+                return null;
             }
-            return ring.SelectTarget();
+            Debug.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点，回溯目标取起点锚点 id={start.Id}");
+            return start;
         }
 
         /// <summary>死亡入口前缀：捕获伤害、判定是否可回溯、冻结时间并驱动结算界面裁决。</summary>
@@ -149,11 +152,18 @@ namespace DeathRewind.Harmony
 
             var ring = _owner != null ? _owner.Ring : null;
             if (ring == null) return true;
-            if (!ring.CanRewind())
+            if (ring.RewindCount >= _config.MaxRewinds)
             {
-                Debug.Log(ring.RewindCount >= _config.MaxRewinds
-                    ? "[DeathRewind] rewind limit reached"
-                    : "[DeathRewind] no eligible anchor");
+                Debug.Log("[DeathRewind] rewind limit reached");
+                return true;
+            }
+
+            // 目标选择含起点锚点回退（进图不足 minRewindAge 时回到进图那一刻）。
+            // 不能用 ring.CanRewind() 做门槛：它只认年龄达标的锚点，进图 60s 内会误判"无合格锚点"。
+            var anchor = SelectTargetWithLevelStartFallback(ring);
+            if (anchor == null)
+            {
+                Debug.Log("[DeathRewind] no eligible anchor");
                 return true;
             }
 
@@ -162,15 +172,7 @@ namespace DeathRewind.Harmony
             _deathSnapshot = CaptureDeathSnapshot();
             _restorer?.SetDeathContext(_deathSnapshot, _capturedDamage);
             _owner.FreezeTimeScale();
-
-            var anchor = SelectTargetWithLevelStartFallback(ring);
             _pendingAnchor = anchor;
-            if (anchor == null)
-            {
-                Debug.Log("[DeathRewind] no eligible anchor at death");
-                CancelPending();
-                return true;
-            }
 
             // 跨地图保护
             if (!string.IsNullOrEmpty(anchor.SceneKey) && anchor.SceneKey != LevelAccess.CurrentSceneKey)
@@ -240,10 +242,12 @@ namespace DeathRewind.Harmony
             var rewindBtn = CreateRewindButtonClone(continueBtn, $"回溯 {ageSeconds:0} 秒");
             Debug.Log($"[DeathRewind] 回溯按钮注入: {(rewindBtn != null ? "ok" : "failed")} (view={view != null} contBtn={continueBtn != null} wait={wait:0.0}s)");
             UnityEngine.UI.RawImage previewImage = null;
+            TextMeshProUGUI hintText = null;
             if (rewindBtn != null)
             {
                 rewindBtn.onClick.AddListener(() => { _rewindClicked = true; });
                 previewImage = CreatePreviewImage(rewindBtn, anchor.PreviewPng);
+                hintText = CreateHintText(rewindBtn);
                 if (previewImage == null)
                     Debug.LogWarning("[DeathRewind] 锚点缩略图不可用（未抓到画面）");
             }
@@ -259,6 +263,7 @@ namespace DeathRewind.Harmony
 
             if (rewindBtn != null) UnityEngine.Object.Destroy(rewindBtn.gameObject);
             if (previewImage != null) UnityEngine.Object.Destroy(previewImage.gameObject);
+            if (hintText != null) UnityEngine.Object.Destroy(hintText.gameObject);
 
             if (!_rewindClicked)
             {
@@ -311,17 +316,83 @@ namespace DeathRewind.Harmony
                 go.transform.SetParent(btnRect != null ? btnRect.parent : rewindBtn.transform, false);
                 var img = go.GetComponent<UnityEngine.UI.RawImage>();
                 img.texture = tex;
-                img.raycastTarget = false;
+                img.raycastTarget = false;   // 缩略图与展示框同为 16:9，无拉伸
 
+                const float previewW = 480f, previewH = 270f;   // 16:9，与缩略图一致
                 var rect = go.GetComponent<RectTransform>();
-                rect.sizeDelta = new Vector2(320f, 180f);
+                rect.sizeDelta = new Vector2(previewW, previewH);
                 if (btnRect != null)
-                    rect.anchoredPosition = btnRect.anchoredPosition + new Vector2(0f, 120f);
+                {
+                    // 放到回溯按钮正下方，留 16px 间距
+                    rect.anchoredPosition = btnRect.anchoredPosition
+                                            - new Vector2(0f, btnRect.rect.height * 0.5f + previewH * 0.5f + 16f);
+                }
                 return img;
             }
             catch (Exception e)
             {
                 Debug.LogWarning($"[DeathRewind] 缩略图注入失败: {e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// "一次机会！"手写批注：字体参考死亡界面上方的大字（如 UGLY 标题），白色，放在回溯按钮
+        /// 右侧，视觉上指向按钮。找不到参考字体时回退 TMP 默认字体。
+        /// </summary>
+        private static TextMeshProUGUI CreateHintText(Button rewindBtn)
+        {
+            if (rewindBtn == null) return null;
+            try
+            {
+                // 在整个结算界面里找参考文字：优先文本含 "UGLY" 的，否则取字号最大的
+                var canvas = rewindBtn.transform.root;
+                var all = canvas.GetComponentsInChildren<TextMeshProUGUI>(true);
+                TextMeshProUGUI reference = null;
+                foreach (var t in all)
+                {
+                    if (t.text != null && t.text.IndexOf("UGLY", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        reference = t;
+                        break;
+                    }
+                }
+                if (reference == null)
+                {
+                    float best = 0f;
+                    foreach (var t in all)
+                    {
+                        if (t.fontSize > best && t.isActiveAndEnabled) { best = t.fontSize; reference = t; }
+                    }
+                }
+
+                var go = new GameObject("DeathRewind_Hint", typeof(RectTransform));
+                var btnRect = rewindBtn.GetComponent<RectTransform>();
+                go.transform.SetParent(btnRect != null ? btnRect.parent : rewindBtn.transform, false);
+                var tmp = go.AddComponent<TextMeshProUGUI>();
+                tmp.text = "一次机会！";
+                tmp.color = Color.white;
+                tmp.fontSize = 48f;
+                tmp.enableWordWrapping = false;
+                tmp.alignment = TextAlignmentOptions.Center;
+                tmp.raycastTarget = false;
+                if (reference != null)
+                {
+                    tmp.font = reference.font;                       // 手写/涂鸦风格与原生大字一致
+                    tmp.fontSharedMaterial = reference.fontSharedMaterial;
+                }
+
+                // 放在回溯按钮右侧同一行，紧邻按钮形成"指向"关系
+                var rect = go.GetComponent<RectTransform>();
+                rect.sizeDelta = new Vector2(300f, 72f);
+                if (btnRect != null)
+                    rect.anchoredPosition = btnRect.anchoredPosition
+                                            + new Vector2(btnRect.rect.width * 0.5f + 170f, 0f);
+                return tmp;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DeathRewind] 提示文字注入失败: {e.Message}");
                 return null;
             }
         }
@@ -405,6 +476,7 @@ namespace DeathRewind.Harmony
                 _owner.ReleaseCommittedDestroy();
                 Debug.Log($"[DeathRewind] rewind result=ok rewindCount={_owner.Ring.RewindCount} consumedAnchor={anchor.Id}");
                 PostReviveFixup();
+                _owner.StartCoroutine(PostReviveGuard());
             }
             else
             {
@@ -415,6 +487,55 @@ namespace DeathRewind.Harmony
             _interceptionActive = false;
             _pendingAnchor = null;
             _owner.ReleaseTimeScale();
+        }
+
+        /// <summary>
+        /// 复活后的无敌守卫：回溯之后外部来源仍可能把主角置回无敌/死亡/加载态
+        /// （游戏内置调试设置 OnlevelInited 会重放无敌设置、作弊热键 Ctrl+=、撤离流程等）。
+        /// 15 秒实时窗口内每 0.5s 复检，发现翻回即复位并记日志；玩家真的再次死亡时立即让位。
+        /// </summary>
+        private static IEnumerator PostReviveGuard()
+        {
+            for (int i = 0; i < 30; i++)
+            {
+                yield return new WaitForSecondsRealtime(0.5f);
+                try
+                {
+                    if (_interceptionActive) yield break;   // 已进入新的死亡拦截流程，让位
+                    var main = LevelManager.Instance?.MainCharacter;
+                    var health = main?.Health;
+                    if (health == null) continue;
+                    if (health.IsDead && health.CurrentHealth <= 0f) yield break;   // 玩家真的又死了
+
+                    var receiver = main.mainDamageReceiver;
+                    if (receiver != null && !receiver.gameObject.activeSelf)
+                    {
+                        receiver.gameObject.SetActive(true);
+                        Debug.LogWarning("[DeathRewind] 复活守卫: mainDamageReceiver 被停用，已重新激活");
+                    }
+                    if (health.Invincible)
+                    {
+                        health.SetInvincible(false);
+                        Debug.LogWarning("[DeathRewind] 复活守卫: invincible 被再次置真，已复位（来源见 SetInvincible 调用栈日志）");
+                    }
+                    if (health.IsDead)
+                    {
+                        Compat.PrivateStateAccessor.SetBool(health, "isDead", false);
+                        Debug.LogWarning("[DeathRewind] 复活守卫: isDead 残留（血量>0），已复位");
+                    }
+                    var core = MultiSceneCore.Instance;
+                    if (core != null && core.IsLoading)
+                    {
+                        typeof(MultiSceneCore).GetField("isLoading", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+                            ?.SetValue(core, false);
+                        Debug.LogWarning("[DeathRewind] 复活守卫: IsLoading 卡在 true，已复位");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[DeathRewind] 复活守卫异常: {e.Message}");
+                }
+            }
         }
 
         private static void ScheduleReplay()
@@ -448,6 +569,10 @@ namespace DeathRewind.Harmony
                     {
                         f.SetValue(core, false);
                         Debug.LogWarning("[DeathRewind] MultiSceneCore.IsLoading 卡在 true，已强制复位（全场无敌的根因）");
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[DeathRewind] IsLoading=true 但未找到 isLoading 字段，无法复位（需核对字段名）");
                     }
                 }
             }
@@ -534,6 +659,14 @@ namespace DeathRewind.Harmony
                         if (model != null && !model.gameObject.activeSelf) model.gameObject.SetActive(true);
                     }
                     catch { /* characterModel 不可访问则跳过 */ }
+                    // 死亡流程 DamageReceiver.OnDead 会停用接收器 GameObject
+                    // （子弹打不中=无敌；AI 目标句柄失效=不索敌）。原生流程死人不复活，没人负责再打开。
+                    var receiver = main.mainDamageReceiver;
+                    if (receiver != null && !receiver.gameObject.activeSelf)
+                    {
+                        receiver.gameObject.SetActive(true);
+                        Debug.LogWarning("[DeathRewind] 复活终检: mainDamageReceiver 处于停用（无敌+不索敌根因），已重新激活");
+                    }
                     if (wasInvincible || wasDead || wasHandled)
                         Debug.Log($"[DeathRewind] 复活终检复位: invincible={wasInvincible} isDead={wasDead} hasHandledDeath={wasHandled}");
                 }

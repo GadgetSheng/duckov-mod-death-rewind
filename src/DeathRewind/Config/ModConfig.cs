@@ -9,10 +9,13 @@ namespace DeathRewind.Config
     public sealed class ModConfig
     {
         public bool Enabled = true;
-        public double AnchorInterval = 15;
-        public int AnchorCount = 4;
+        /// <summary>锚点间隔（秒）。position 模式锚点纯内存且轻量，默认 5s 一记，可回溯到约 60s 前的状态。</summary>
+        public double AnchorInterval = 5;
+        /// <summary>锚点环容量。默认 16 个 × 5s = 80s 覆盖窗口（minRewindAge=60 需要落在窗口内）。</summary>
+        public int AnchorCount = 16;
         public double MinRewindAge = 60;
-        public int MaxRewinds = 3;
+        /// <summary>设计约束：每关只能复活回溯一次。固定为 1，不可通过 config.txt / 游戏内设置修改。</summary>
+        public int MaxRewinds = 1;
         public double SampleInterval = 0.25;
         public bool AutoRewind;
         public string RewindHotkey = "F9";
@@ -20,6 +23,12 @@ namespace DeathRewind.Config
         public bool DebugMode;
         public string ForceFailPhase = "";
         public bool LogVerbose;
+        /// <summary>
+        /// 回溯范围：
+        /// "position" = 只把玩家送回锚点位置（已获得的物品不回溯、敌人不复活）——默认；
+        /// "full"     = 连同容器内容与敌人状态一起回滚（开销大、风险高）。
+        /// </summary>
+        public string RewindScope = "position";
         /// <summary>调试用：进入关卡 N 秒后自动触发一次自身死亡（0 = 关闭）。仅 debugMode 生效。</summary>
         public double DebugAutoDeathAfter = 0;
         /// <summary>锚点采集时每帧最多处理多少个容器（分帧摊开，避免单帧长耗时）。</summary>
@@ -52,7 +61,6 @@ namespace DeathRewind.Config
                 cfg.AnchorInterval = GetDouble(raw, "anchorInterval", cfg.AnchorInterval);
                 cfg.AnchorCount = GetInt(raw, "anchorCount", cfg.AnchorCount);
                 cfg.MinRewindAge = GetDouble(raw, "minRewindAge", cfg.MinRewindAge);
-                cfg.MaxRewinds = GetInt(raw, "maxRewinds", cfg.MaxRewinds);
                 cfg.SampleInterval = GetDouble(raw, "sampleInterval", cfg.SampleInterval);
                 cfg.AutoRewind = GetBool(raw, "autoRewind", cfg.AutoRewind);
                 cfg.RewindHotkey = GetString(raw, "rewindHotkey", cfg.RewindHotkey);
@@ -60,22 +68,56 @@ namespace DeathRewind.Config
                 cfg.DebugMode = GetBool(raw, "debugMode", cfg.DebugMode);
                 cfg.ForceFailPhase = GetString(raw, "forceFailPhase", cfg.ForceFailPhase);
                 cfg.LogVerbose = GetBool(raw, "logVerbose", cfg.LogVerbose);
+                cfg.RewindScope = GetString(raw, "rewindScope", cfg.RewindScope);
                 cfg.DebugAutoDeathAfter = GetDouble(raw, "debugAutoDeathAfter", cfg.DebugAutoDeathAfter);
                 cfg.AnchorCaptureBatchSize = GetInt(raw, "anchorCaptureBatchSize", cfg.AnchorCaptureBatchSize);
                 cfg.AnchorCaptureBudgetMs = GetDouble(raw, "anchorCaptureBudgetMs", cfg.AnchorCaptureBudgetMs);
             }
+            // ModConfig 框架覆盖：游戏内设置界面保存的值优先于 config.txt（框架未装则原样通过）
+            ApplyModConfigOverrides(cfg);
             cfg.Validate();
             return cfg;
         }
 
+        /// <summary>用 ModConfig 框架（游戏内设置界面）保存的值覆盖 config.txt（框架未装则原样返回）。</summary>
+        private static void ApplyModConfigOverrides(ModConfig cfg)
+        {
+            if (!ModConfigBridge.Available) return;
+            cfg.Enabled = ModConfigBridge.Load("enabled", cfg.Enabled);
+            cfg.AnchorInterval = ModConfigBridge.Load("anchorInterval", (float)cfg.AnchorInterval);
+            cfg.AnchorCount = ModConfigBridge.Load("anchorCount", cfg.AnchorCount);
+            cfg.MinRewindAge = ModConfigBridge.Load("minRewindAge", (float)cfg.MinRewindAge);
+            cfg.SampleInterval = ModConfigBridge.Load("sampleInterval", (float)cfg.SampleInterval);
+            cfg.RewindScope = ModConfigBridge.Load("rewindScope", cfg.RewindScope);
+            cfg.AutoRewind = ModConfigBridge.Load("autoRewind", cfg.AutoRewind);
+            cfg.DebugMode = ModConfigBridge.Load("debugMode", cfg.DebugMode);
+            cfg.LogVerbose = ModConfigBridge.Load("logVerbose", cfg.LogVerbose);
+        }
+
+        /// <summary>游戏内设置变更后重新加载覆盖值并重新校验（ModBehaviour 的选项变更回调调用）。</summary>
+        public void ReloadFromModConfig()
+        {
+            ApplyModConfigOverrides(this);
+            Validate();
+        }
+
         private void Validate()
         {
-            if (AnchorInterval <= 0) { Debug.LogWarning("[DeathRewind] anchorInterval 非法，回落 60"); AnchorInterval = 60; }
-            if (AnchorCount < 2) { Debug.LogWarning("[DeathRewind] anchorCount 非法，回落 4"); AnchorCount = 4; }
-            if (MaxRewinds < 1) { Debug.LogWarning("[DeathRewind] maxRewinds 非法，回落 3"); MaxRewinds = 3; }
+            if (AnchorInterval <= 0) { Debug.LogWarning("[DeathRewind] anchorInterval 非法，回落 5"); AnchorInterval = 5; }
+            if (AnchorCount < 2) { Debug.LogWarning("[DeathRewind] anchorCount 非法，回落 16"); AnchorCount = 16; }
             if (SampleInterval <= 0) { Debug.LogWarning("[DeathRewind] sampleInterval 非法，回落 0.25"); SampleInterval = 0.25; }
             if (AnchorCaptureBatchSize < 1) { Debug.LogWarning("[DeathRewind] anchorCaptureBatchSize 非法，回落 2"); AnchorCaptureBatchSize = 2; }
             if (AnchorCaptureBudgetMs <= 0) { Debug.LogWarning("[DeathRewind] anchorCaptureBudgetMs 非法，回落 2"); AnchorCaptureBudgetMs = 2; }
+            if (!string.Equals(RewindScope, "position", System.StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(RewindScope, "full", System.StringComparison.OrdinalIgnoreCase))
+            {
+                Debug.LogWarning($"[DeathRewind] rewindScope 非法（{RewindScope}），回落 position");
+                RewindScope = "position";
+            }
+            else
+            {
+                RewindScope = RewindScope.ToLowerInvariant();
+            }
             if (MinRewindAge > AnchorCount * AnchorInterval)
             {
                 Debug.LogWarning($"[DeathRewind] minRewindAge({MinRewindAge}) > anchorCount*anchorInterval({AnchorCount * AnchorInterval})，回退将永远不可用，回落");

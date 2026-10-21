@@ -29,18 +29,23 @@ namespace DeathRewind.Unity
         private readonly AnchorRing _ring;
         private readonly EntitySampler _sampler;
 
+        /// <summary>缩略图来源（端帧定期抓取的缓存画面）；为 null 时锚点不带预览图。</summary>
+        private readonly Func<byte[]> _thumbnailProvider;
+
         /// <summary>上次采集时各容器的内容指纹（用于跳过未变化容器的重复序列化）。</summary>
         private readonly Dictionary<string, int> _lastFingerprints = new Dictionary<string, int>();
 
         /// <summary>上次采集时各容器的载荷（内容未变化时直接复用）。</summary>
         private readonly Dictionary<string, byte[]> _lastPayloads = new Dictionary<string, byte[]>();
 
-        public AnchorBuilder(Config.ModConfig config, LiveStateStore store, AnchorRing ring, EntitySampler sampler = null)
+        public AnchorBuilder(Config.ModConfig config, LiveStateStore store, AnchorRing ring, EntitySampler sampler = null,
+            Func<byte[]> thumbnailProvider = null)
         {
             _config = config;
             _store = store;
             _ring = ring;
             _sampler = sampler;
+            _thumbnailProvider = thumbnailProvider;
         }
 
         /// <summary>锚点文件根目录：&lt;Application.persistentDataPath&gt;/ModRewind（mod 私有数据目录）。</summary>
@@ -63,6 +68,7 @@ namespace DeathRewind.Unity
         /// </summary>
         public AnchorBuildContext BeginBuild(int id, double absTimestamp, double gridTimestamp)
         {
+            bool full = IsFullScope();
             var ctx = new AnchorBuildContext { Id = id, AbsTimestamp = absTimestamp, GridTimestamp = gridTimestamp };
             var anchor = new Anchor
             {
@@ -73,12 +79,13 @@ namespace DeathRewind.Unity
                 Player = _store.GetPlayer()?.Clone(),
                 World = new WorldState { TimeOfDay = WorldTime() },
             };
-            // 缩略图：抓一帧画面（失败不影响锚点本身）
-            anchor.PreviewPng = ThumbnailCapture.Capture();
+            // 缩略图：取端帧定期抓取的缓存画面（不在构建路径上做全屏截图；失败不影响锚点本身）
+            anchor.PreviewPng = _thumbnailProvider?.Invoke();
 
             // 玩家装备槽载荷：CharacterItem 的槽位（护甲/头盔/手持武器等）不在背包 Inventory 里，
             // 背包载荷覆盖不到，必须单独采集（只在锚点构建时做一次，逐 tick 采集太贵）。
-            if (anchor.Player != null)
+            // 仅 full 模式：position 回溯不还原装备槽。
+            if (full && anchor.Player != null)
             {
                 try { anchor.Player.Slots = InventoryPayload.CaptureSlots(LevelAccess.MainCharacter?.CharacterItem); }
                 catch (Exception e) { Debug.LogWarning($"[DeathRewind] 玩家装备槽采集失败: {e.Message}"); }
@@ -90,7 +97,8 @@ namespace DeathRewind.Unity
                 if (st == null) continue;
                 // 敌人物品载荷：死亡时游戏会把死者物品整体搬进战利品箱（CreateFromItem → Detach），
                 // 直接复活会得到空手敌人，必须采集锚点时刻的背包与装备槽（只对活着的敌人采集）。
-                if (st.Alive)
+                // 仅 full 模式：position 回溯不复活敌人。
+                if (full && st.Alive)
                 {
                     try
                     {
@@ -110,12 +118,15 @@ namespace DeathRewind.Unity
             ctx.Anchor = anchor;
 
             var map = LevelAccess.LootBoxInventories;
-            if (map != null)
+            if (map != null && full)
             {
                 foreach (var kv in map) ctx.ContainerKeys.Add(new KeyValuePair<string, int>("loot:" + kv.Key, kv.Key));
             }
             return ctx;
         }
+
+        /// <summary>是否需要完整的"世界回滚"（容器载荷 + 敌人状态）。position 模式不需要。</summary>
+        public bool IsFullScope() => string.Equals(_config.RewindScope, "full", System.StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 第二段（主线程，分帧推进）：每帧只序列化有限个容器，并在时间预算内停止。
@@ -184,6 +195,13 @@ namespace DeathRewind.Unity
         /// </summary>
         public void StartIo(AnchorBuildContext ctx)
         {
+            // position 模式：锚点纯内存（只回溯玩家位姿/血量，不回滚容器与元系统）→ 无任何落盘
+            if (!IsFullScope())
+            {
+                ctx.IoTask = System.Threading.Tasks.Task.FromResult(true);
+                return;
+            }
+
             var anchor = ctx.Anchor;
             try { Directory.CreateDirectory(RootDir); }
             catch (Exception e) { ctx.IoError = "创建目录失败: " + e.Message; return; }
@@ -208,9 +226,12 @@ namespace DeathRewind.Unity
             {
                 try
                 {
-                    File.WriteAllText(tmpPayloadPath, payloadText, new System.Text.UTF8Encoding(false));
-                    if (File.Exists(payloadPath)) File.Delete(payloadPath);
-                    File.Move(tmpPayloadPath, payloadPath);
+                    if (lines.Count > 0)
+                    {
+                        File.WriteAllText(tmpPayloadPath, payloadText, new System.Text.UTF8Encoding(false));
+                        if (File.Exists(payloadPath)) File.Delete(payloadPath);
+                        File.Move(tmpPayloadPath, payloadPath);
+                    }
                     return TryCopyWithVerify(mainSavePath, saveCopyPath);
                 }
                 catch (Exception e)
@@ -243,7 +264,7 @@ namespace DeathRewind.Unity
                 Debug.LogWarning($"[DeathRewind] 锚点 {ctx.Id} 落盘失败（{ctx.IoError ?? "主存档副本校验未通过"}），该锚点不可用于回退");
                 return null;
             }
-            VerifyPlayerPayload(ctx.Anchor);
+            if (IsFullScope()) VerifyPlayerPayload(ctx.Anchor);   // position 模式不还原背包，跳过昂贵的往返自检
             Debug.Log($"[DeathRewind] 锚点 {ctx.Id} 构建完成: 主线程采集 {ctx.CaptureMs}ms（{ctx.ContainerKeys.Count} 个容器）/ 后台 IO {ctx.IoMs}ms / 合计 {ctx.CaptureMs + ctx.IoMs}ms");
             return ctx.Anchor;
         }
