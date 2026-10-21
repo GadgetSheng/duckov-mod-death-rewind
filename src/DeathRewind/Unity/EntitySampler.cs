@@ -92,7 +92,7 @@ namespace DeathRewind.Unity
         private void SampleContainers()
         {
             // LootBoxInventories 是静态属性（反编译确认），不能用实例引用访问
-            var map = LevelManager.LootBoxInventories;
+            var map = LevelAccess.LootBoxInventories;
             if (map == null) return;
             foreach (var kv in map)
             {

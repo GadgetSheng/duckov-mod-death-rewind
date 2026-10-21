@@ -79,7 +79,7 @@
 | 关卡/局结束事件源 | `RaidUtilities.OnRaidEnd`（撤离或死亡结算时触发）、`SceneLoader.onStartedLoadingScene` |
 | Mod 配置目录约定 | `Duckov.app/Contents/ModConfig/<ModName>/config.json`（本机实例：`Contents/ModConfig/BattlefieldTypeKillNotice/config.json`） |
 | 战斗中已有仅含坐标的位置备份（20 条，3 秒间隔） | `PlayerPositionBackupManager`（与本 Mod 无关，不复用） |
-| Mod 加载机制 | `ModManager.DefaultModFolderPath = Path.Combine(Application.dataPath, "Mods")`（macOS 即 `Duckov.app/Contents/Resources/Data/Mods/<Mod>/`）；DLL 必须命名为 `<name>.dll`，同目录需 `info.ini`（扁平 `key=value`，`name` 必需）与 `preview.png`；入口类型必须是 `<name>.ModBehaviour` 且继承 `Duckov.Modding.ModBehaviour`，游戏通过 `Setup()`→`OnAfterSetup()` 初始化、`NotifyBeforeDeactivate()`→`OnBeforeDeactivate()` 卸载；Harmony 不内置，需自带 2.4.1（该包无 netstandard TFM，Mod 工程用 `net472` + 仓库内置 `vendor/0Harmony.dll`） | `Duckov.Modding.ModManager`、`Duckov.Modding.ModBehaviour` |
+| Mod 加载机制 | `ModManager.DefaultModFolderPath = Path.Combine(Application.dataPath, "Mods")`；**macOS 实测该路径为 `Duckov.app/Contents/Mods/`**（探针实验确认：放在 `Contents/Resources/Data/Mods/` 的目录不会被扫描）。DLL 必须命名为 `<name>.dll`，同目录需 `info.ini`（扁平 `key=value`，`name` 必需、`description` 缺失会打错误日志）与 `preview.png`；入口类型必须是 `<name>.ModBehaviour` 且继承 `Duckov.Modding.ModBehaviour`，游戏通过 `Setup()`→`OnAfterSetup()` 初始化、`NotifyBeforeDeactivate()`→`OnBeforeDeactivate()` 卸载；启用状态存于 `Saves/Global.json` 的 `ModActive_<name>` 布尔键；Harmony 不内置，需自带 2.4.1（该包无 netstandard TFM，Mod 工程用 `net472` + 仓库内置 `vendor/0Harmony.dll`） | `Duckov.Modding.ModManager`、`Duckov.Modding.ModBehaviour`、Player.log 探针实验 |
 
 ## 4. 总体架构
 

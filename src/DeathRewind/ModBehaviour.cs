@@ -37,6 +37,8 @@ namespace DeathRewind
 
             _clock = new RewindClock();
             _ring = new AnchorRing(_config.AnchorCount, _config.MinRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
+            _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
             _builder = new AnchorBuilder(_config, _store, _ring);
             _restorer = new WorldRestorer(_config, _ring, _store);
@@ -81,7 +83,7 @@ namespace DeathRewind
                 }
 
                 var due = _ring.PollDueGridTimestamp();
-                if (due.HasValue)
+                if (due.HasValue && LevelAccess.LevelReady)
                 {
                     int id = _ring.AllocateId();
                     var sw = Stopwatch.StartNew();

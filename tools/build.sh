@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GAME_DIR="${GAME_DIR:-/Users/gadget/Library/Application Support/Steam/steamapps/common/Escape from Duckov}"
 MANAGED_DIR="$GAME_DIR/Duckov.app/Contents/Resources/Data/Managed"
-MODS_DIR="${MODS_DIR:-$GAME_DIR/Duckov.app/Contents/Resources/Data/Mods/DeathRewind}"
+MODS_DIR="${MODS_DIR:-$GAME_DIR/Duckov.app/Contents/Mods/DeathRewind}"   # macOS 实测：ModManager 扫描的是 Contents/Mods
 
 bash "$ROOT/tools/fetch-harmony.sh"
 bash "$ROOT/tools/check-core-purity.sh"

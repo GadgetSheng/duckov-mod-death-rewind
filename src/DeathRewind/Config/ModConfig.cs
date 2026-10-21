@@ -21,10 +21,10 @@ namespace DeathRewind.Config
         public string ForceFailPhase = "";
         public bool LogVerbose;
 
-        // macOS: Application.dataPath = <app>/Contents/Resources/Data
-        //      → ../../ModConfig = <app>/Contents/ModConfig（与游戏现有 ModConfig 目录一致）
+        // macOS 实测：Application.dataPath = <app>/Contents（ModManager 扫描 <app>/Contents/Mods 可证），
+        // 因此 Mod 配置目录是 <app>/Contents/ModConfig/<ModName>/（与游戏现有 ModConfig 目录一致）。
         public static string FilePath =>
-            Path.GetFullPath(Path.Combine(Application.dataPath, "../../ModConfig/DeathRewind/config.txt"));
+            Path.GetFullPath(Path.Combine(Application.dataPath, "ModConfig/DeathRewind/config.txt"));
 
         public static ModConfig Load()
         {

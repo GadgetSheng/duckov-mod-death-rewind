@@ -174,7 +174,7 @@ namespace DeathRewind.Unity
                 pre.PlayerBagPayload = InventoryPayload.Capture(main.CharacterItem?.Inventory);
             }
 
-            var map = LevelManager.LootBoxInventories;
+            var map = LevelAccess.LootBoxInventories;
             if (map != null)
             {
                 foreach (var kv in map)
@@ -283,7 +283,7 @@ namespace DeathRewind.Unity
             {
                 if (ForceFail("C")) throw new InvalidOperationException("forced failure at C");
 
-                var map = LevelManager.LootBoxInventories;
+                var map = LevelAccess.LootBoxInventories;
                 if (map != null)
                 {
                     // 载荷来源：优先内存中的锚点载荷，缺失时回落到锚点载荷文件（只读一次）
@@ -781,7 +781,7 @@ namespace DeathRewind.Unity
         private async Task RestoreContainersFromPre()
         {
             if (_pre == null) return;
-            var map = LevelManager.LootBoxInventories;
+            var map = LevelAccess.LootBoxInventories;
             if (map == null) return;
             foreach (var kv in _pre.Containers)
             {

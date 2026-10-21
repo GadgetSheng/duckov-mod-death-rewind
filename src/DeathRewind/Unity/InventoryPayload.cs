@@ -47,9 +47,13 @@ namespace DeathRewind.Unity
         public static bool VerifyRoundTrip(Inventory inventory)
         {
             if (inventory == null) return true;
-            var data = Parse(Capture(inventory));
+            InventoryData data = null;
+            try { data = Parse(Capture(inventory)); }
+            catch { return false; }
             if (data == null) return false;
-            return data.entries != null && data.entries.Count == inventory.Content.Count;
+            var content = inventory.Content;
+            int count = content == null ? 0 : content.Count;
+            return data.entries != null && data.entries.Count == count;
         }
     }
 }

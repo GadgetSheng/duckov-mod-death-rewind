@@ -79,7 +79,7 @@ namespace DeathRewind.Unity
         {
             try
             {
-                var map = LevelManager.LootBoxInventories;
+                var map = LevelAccess.LootBoxInventories;
                 if (map != null)
                 {
                     foreach (var kv in map)
@@ -112,14 +112,26 @@ namespace DeathRewind.Unity
             };
             try { ES3.DeleteFile(anchor.ContainerPayloadPath, settings); }
             catch (Exception e) { Debug.LogWarning($"[DeathRewind] 清理旧锚点载荷失败: {e.Message}"); }
+            int saved = 0;
             foreach (var kv in anchor.Containers)
             {
                 if (kv.Value?.ItemPayload == null) continue;
                 ES3.Save(kv.Key, Convert.ToBase64String(kv.Value.ItemPayload), settings);
+                saved++;
             }
             if (anchor.Player?.BagPayload != null)
+            {
                 ES3.Save(PlayerPayloadKey, Convert.ToBase64String(anchor.Player.BagPayload), settings);
-            ES3.StoreCachedFile(anchor.ContainerPayloadPath, settings);
+                saved++;
+            }
+            // 没有写入任何键时不要 StoreCachedFile：ES3 会因缓存里找不到该文件而抛异常
+            if (saved == 0)
+            {
+                Debug.LogWarning($"[DeathRewind] 锚点 {anchor.Id} 没有可落盘的载荷（容器与背包均为空）");
+                return;
+            }
+            try { ES3.StoreCachedFile(anchor.ContainerPayloadPath, settings); }
+            catch (Exception e) { Debug.LogWarning($"[DeathRewind] 锚点 {anchor.Id} 载荷落盘失败: {e.Message}"); }
         }
 
         /// <summary>
