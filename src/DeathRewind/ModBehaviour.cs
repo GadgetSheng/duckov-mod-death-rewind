@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using DeathRewind.Config;
@@ -166,13 +167,36 @@ namespace DeathRewind
         {
             var player = LevelManager.Instance?.MainCharacter;
             if (player == null) return;
-            player.Health.Hurt(new DamageInfo
+            var health = player.Health;
+            if (health == null) return;
+            var dmg = new DamageInfo
             {
                 damageValue = 1e6f,
                 finalDamage = 1e6f,
-                toDamageReceiver = player.GetComponent<DamageReceiver>(),
+                fromCharacter = player,
+                toDamageReceiver = player.GetComponentInChildren<DamageReceiver>() ?? player.GetComponent<DamageReceiver>(),
                 damagePoint = player.transform.position,
-            });
+            };
+            try
+            {
+                health.Hurt(dmg);
+                return;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DeathRewind] 调试致死经 Health.Hurt 失败（{e.Message}），改用直接触发死亡事件");
+            }
+            // 兜底：与 Health.Hurt 的死亡分支等价 —— 置零血量、置死亡标记、触发 OnDeadEvent
+            try
+            {
+                health.SetHealth(0f);
+                Compat.PrivateStateAccessor.SetBool(health, "isDead", true);
+                health.OnDeadEvent?.Invoke(dmg);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DeathRewind] 调试致死兜底失败: {e}");
+            }
         }
 
         private static KeyCode ParseKey(string name)
