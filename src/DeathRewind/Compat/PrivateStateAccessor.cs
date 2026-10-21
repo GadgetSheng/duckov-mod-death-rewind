@@ -53,6 +53,15 @@ namespace DeathRewind.Compat
             catch (Exception e) { Debug.LogError($"[DeathRewind] 读取私有字段 {name} 失败: {e.Message}"); return 0f; }
         }
 
+        /// <summary>读取私有对象类型字段（例如 AICharacterController.characterMainControl）。</summary>
+        public static object GetObject(object target, string name)
+        {
+            var f = FindField(target, name);
+            if (f == null) { WarnMissing(target, name); return null; }
+            try { return f.GetValue(target); }
+            catch (Exception e) { Debug.LogError($"[DeathRewind] 读取私有字段 {name} 失败: {e.Message}"); return null; }
+        }
+
         public static void SetFloat(object target, string name, float value)
         {
             var f = FindField(target, name);

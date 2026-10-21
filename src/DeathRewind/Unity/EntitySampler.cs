@@ -12,6 +12,8 @@ namespace DeathRewind.Unity
         private readonly double _anchorInterval;
         private readonly Dictionary<Health, string> _enemyIds = new Dictionary<Health, string>();
         private readonly Dictionary<GameObject, string> _enemyObjects = new Dictionary<GameObject, string>();
+        private readonly Dictionary<Health, AICharacterController> _enemyControllers = new Dictionary<Health, AICharacterController>();
+        private readonly Dictionary<DamageReceiver, string> _receiverIds = new Dictionary<DamageReceiver, string>();
         private readonly Dictionary<Door, string> _doorIds = new Dictionary<Door, string>();
         private readonly Dictionary<string, double> _registeredAt = new Dictionary<string, double>();
         private readonly HashSet<string> _anchorCovered = new HashSet<string>();
@@ -32,7 +34,7 @@ namespace DeathRewind.Unity
         {
             if (health == null) return false;
             if (health.IsMainCharacterHealth) return false;
-            return health.GetComponent<AICharacterController>() != null;
+            return FindAiController(health) != null;
         }
 
         public void Sample(double now)
@@ -61,15 +63,19 @@ namespace DeathRewind.Unity
 
         private void SampleEnemies()
         {
-            // 1) 发现新实体（只枚举激活对象）
+            // 1) 发现新实体 —— 敌人可能把 Health 与 AI 控制器放在不同 GameObject 上，
+            //    所以两条路都走：① 枚举 AICharacterController（主力）② 枚举 Health（兜底）
+            foreach (var ai in Object.FindObjectsByType<AICharacterController>(FindObjectsSortMode.None))
+            {
+                var character = Compat.PrivateStateAccessor.GetObject(ai, "characterMainControl") as CharacterMainControl;
+                var health = character?.Health;
+                if (health == null) continue;
+                RegisterEnemy(health, ai);
+            }
             foreach (var health in Object.FindObjectsByType<Health>(FindObjectsSortMode.None))
             {
-                if (!IsEnemyCharacter(health)) continue;
-                if (_enemyIds.ContainsKey(health)) continue;
-                string id = "enemy:" + (++_enemySeq);
-                _enemyIds[health] = id;
-                _enemyObjects[health.gameObject] = id;
-                _registeredAt[id] = _now;
+                if (health == null || health.IsMainCharacterHealth) continue;
+                RegisterEnemy(health, FindAiController(health));
             }
 
             // 2) 更新状态（必须遍历注册表，否则停用的敌人观测不到）
@@ -77,7 +83,7 @@ namespace DeathRewind.Unity
             {
                 var health = kv.Key;
                 if (health == null) { RemoveEntry(kv.Value, kv.Key); continue; }
-                var ai = health.GetComponent<AICharacterController>();
+                var ai = _enemyControllers.TryGetValue(health, out var ctrl) ? ctrl : FindAiController(health);
                 _store.SetEnemy(kv.Value, new EnemyState
                 {
                     Position = ToArray3(health.transform.position),
@@ -85,8 +91,51 @@ namespace DeathRewind.Unity
                     Health = health.CurrentHealth,
                     Alive = !health.IsDead,
                     AiTargetId = ResolveTargetId(ai),
+                    Noticed = ai != null && ai.noticed,
                 });
             }
+        }
+
+        /// <summary>登记一个敌人（分配稳定 ID、记录 AI 控制器与 DamageReceiver）。</summary>
+        private void RegisterEnemy(Health health, AICharacterController ai)
+        {
+            if (health == null || health.IsMainCharacterHealth) return;
+            if (_enemyIds.ContainsKey(health)) return;
+            string id = "enemy:" + (++_enemySeq);
+            _enemyIds[health] = id;
+            _enemyObjects[health.gameObject] = id;
+            _registeredAt[id] = _now;
+            if (ai != null) _enemyControllers[health] = ai;
+            var receiver = FindDamageReceiver(health);
+            if (receiver != null) _receiverIds[receiver] = id;
+        }
+
+        /// <summary>
+        /// 找到敌人身上的 AI 控制器。Health 与 AICharacterController 可能在不同 GameObject 上，
+        /// 因此依次尝试：同物体 → 角色自身 → 角色子物体。
+        /// </summary>
+        public static AICharacterController FindAiController(Health health)
+        {
+            if (health == null) return null;
+            var ai = health.GetComponent<AICharacterController>();
+            if (ai != null) return ai;
+            CharacterMainControl character = null;
+            try { character = health.TryGetCharacter(); } catch { /* 忽略 */ }
+            if (character == null) return null;
+            ai = character.GetComponent<AICharacterController>();
+            if (ai != null) return ai;
+            return character.GetComponentInChildren<AICharacterController>();
+        }
+
+        /// <summary>找到 Health 所属角色身上的 DamageReceiver（AI 索敌用的就是它）。</summary>
+        public static DamageReceiver FindDamageReceiver(Health health)
+        {
+            if (health == null) return null;
+            var receiver = health.GetComponent<DamageReceiver>();
+            if (receiver != null) return receiver;
+            var character = health.TryGetCharacter();
+            if (character == null) return null;
+            return character.GetComponent<DamageReceiver>() ?? character.GetComponentInChildren<DamageReceiver>();
         }
 
         private void SampleContainers()
@@ -298,9 +347,44 @@ namespace DeathRewind.Unity
         private string ResolveTargetId(AICharacterController ai)
         {
             if (ai == null) return null;
-            var target = ai.searchedEnemy != null ? ai.searchedEnemy.gameObject : null;
+            var target = ai.searchedEnemy;
             if (target == null) return null;
-            return _enemyObjects.TryGetValue(target, out var id) ? id : null;   // 目标不在注册表 → null
+            // 目标可能是玩家（DamageReceiver 不在敌人注册表里）
+            var player = LevelAccess.MainCharacter;
+            if (player != null)
+            {
+                var playerReceiver = FindDamageReceiver(player.Health);
+                if (playerReceiver != null && playerReceiver == target) return "player";
+            }
+            return _receiverIds.TryGetValue(target, out var id) ? id : null;
+        }
+
+        /// <summary>按稳定 ID 取敌人的 AI 控制器（回退时写回索敌状态用）。</summary>
+        public AICharacterController GetEnemyAi(string id)
+        {
+            foreach (var kv in _enemyIds)
+                if (kv.Value == id)
+                {
+                    if (kv.Key == null) return null;
+                    if (_enemyControllers.TryGetValue(kv.Key, out var ai)) return ai;
+                    return FindAiController(kv.Key);
+                }
+            return null;
+        }
+
+        /// <summary>按稳定 ID 取敌人的 DamageReceiver（AI 索敌对象）。</summary>
+        public DamageReceiver GetEnemyReceiver(string id)
+        {
+            foreach (var kv in _enemyIds)
+                if (kv.Value == id && kv.Key != null) return FindDamageReceiver(kv.Key);
+            return null;
+        }
+
+        /// <summary>玩家的 DamageReceiver（敌人的索敌对象通常是它）。</summary>
+        public DamageReceiver GetPlayerReceiver()
+        {
+            var player = LevelAccess.MainCharacter;
+            return player == null ? null : FindDamageReceiver(player.Health);
         }
 
         private static float[] ToArray3(Vector3 v) => new[] { v.x, v.y, v.z };

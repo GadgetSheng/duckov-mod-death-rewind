@@ -28,6 +28,8 @@ namespace DeathRewind.Core
         public float Health;
         public bool Alive;
         public string AiTargetId;
+        /// <summary>AI 是否已察觉目标（回退时写回，避免敌人停在"困惑/问号"状态）。</summary>
+        public bool Noticed;
 
         public EnemyState Clone() => new EnemyState
         {
@@ -36,6 +38,7 @@ namespace DeathRewind.Core
             Health = Health,
             Alive = Alive,
             AiTargetId = AiTargetId,
+            Noticed = Noticed,
         };
     }
 

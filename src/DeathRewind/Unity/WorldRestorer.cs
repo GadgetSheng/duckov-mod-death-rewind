@@ -398,11 +398,11 @@ namespace DeathRewind.Unity
                     if (dead)
                     {
                         // 复活：AI 复位为 null（不写回锚点的 AI 目标）
-                        ReviveEnemy(h, a);
+                        ReviveEnemy(h, a, id);
                     }
                     else
                     {
-                        WriteEnemyState(h, a);
+                        WriteEnemyState(h, a, id);
                     }
                     _enemiesChanged++;
                     continue;
@@ -416,12 +416,12 @@ namespace DeathRewind.Unity
             }
         }
 
-        /// <summary>写回敌人的位置/旋转/血量与 AI 目标（目标实体已不存在则置 null）。</summary>
-        private void WriteEnemyState(Health h, EnemyState a)
+        /// <summary>写回敌人的位置/旋转/血量与 AI 状态（索敌目标与察觉标志）。</summary>
+        private void WriteEnemyState(Health h, EnemyState a, string id = null)
         {
             if (h == null || a == null) return;
             WriteEnemyTransform(h, a);
-            ApplyAiTarget(h, a);
+            ApplyAiState(h, a, id);
         }
 
         /// <summary>只写回位姿与血量。</summary>
@@ -433,27 +433,32 @@ namespace DeathRewind.Unity
             try { h.SetHealth(a.Health); } catch { /* 血量写入失败不阻断差量表 */ }
         }
 
-        /// <summary>AI 目标：目标实体仍存在则写回，否则置 null。</summary>
-        private void ApplyAiTarget(Health h, EnemyState a)
+        /// <summary>
+        /// AI 状态：写回索敌目标与"是否已察觉"。
+        /// 敌人的 AICharacterController 可能不在 Health 所在的 GameObject 上，必须经注册表找回。
+        /// 不写回察觉标志会让敌人停在"困惑（问号）"状态。
+        /// </summary>
+        private void ApplyAiState(Health h, EnemyState a, string id)
         {
             if (h == null || a == null) return;
-            var ai = h.GetComponent<AICharacterController>();
+            var ai = id != null ? _sampler?.GetEnemyAi(id) : null;
+            if (ai == null) ai = EntitySampler.FindAiController(h);
             if (ai == null) return;
-            var targetGo = GetEnemyObject(a.AiTargetId);
-            if (targetGo != null)
+
+            DamageReceiver targetReceiver = null;
+            if (!string.IsNullOrEmpty(a.AiTargetId))
             {
-                ai.searchedEnemy = targetGo.GetComponent<DamageReceiver>();
-                ai.SetTarget(targetGo.transform);
+                targetReceiver = a.AiTargetId == "player"
+                    ? _sampler?.GetPlayerReceiver()
+                    : _sampler?.GetEnemyReceiver(a.AiTargetId);
             }
-            else
-            {
-                ai.searchedEnemy = null;
-                ai.SetTarget(null);
-            }
+            ai.searchedEnemy = targetReceiver;
+            ai.SetTarget(targetReceiver != null ? targetReceiver.transform : null);
+            ai.noticed = a.Noticed;
         }
 
-        /// <summary>复活：启用对象、清 isDead、写回血量与位姿、复位 AI（不调用 Init）。</summary>
-        private static void ReviveEnemy(Health h, EnemyState a)
+        /// <summary>复活：启用对象、清 isDead、写回血量与位姿，并恢复锚点时刻的索敌状态。</summary>
+        private void ReviveEnemy(Health h, EnemyState a, string id = null)
         {
             if (h == null) return;
             h.gameObject.SetActive(true);
@@ -464,11 +469,17 @@ namespace DeathRewind.Unity
                 h.transform.position = ToVector3(a.Position);
                 h.transform.rotation = ToQuaternion(a.Rotation);
             }
-            var ai = h.GetComponent<AICharacterController>();
+            var ai = id != null ? _sampler?.GetEnemyAi(id) : null;
+            if (ai == null) ai = EntitySampler.FindAiController(h);
             if (ai == null) return;
-            ai.SetTarget(null);
             ai.StopMove();
-            ai.noticed = false;
+            // 索敌目标与察觉标志按锚点恢复：置 null 会让敌人进入"困惑（问号）"状态
+            ApplyAiState(h, a, id);
+            if (a == null || string.IsNullOrEmpty(a.AiTargetId))
+            {
+                ai.SetTarget(null);
+                ai.noticed = false;
+            }
         }
 
         /// <summary>门：按锚点状态强制开合（不触发事件）。</summary>
@@ -825,12 +836,12 @@ namespace DeathRewind.Unity
                     if (dead)
                     {
                         // B 活 / X 死（含"已停用但对象还在"）：复活 + 写回 B 的状态
-                        ReviveEnemy(h, b);
-                        WriteEnemyState(h, b);
+                        ReviveEnemy(h, b, id);
+                        WriteEnemyState(h, b, id);
                     }
                     else
                     {
-                        WriteEnemyState(h, b);
+                        WriteEnemyState(h, b, id);
                     }
                     _enemiesChanged++;
                     continue;
