@@ -130,8 +130,8 @@ namespace DeathRewind.Unity
                 Debug.LogWarning($"[DeathRewind] 锚点 {anchor.Id} 没有可落盘的载荷（容器与背包均为空）");
                 return;
             }
-            try { ES3.StoreCachedFile(anchor.ContainerPayloadPath, settings); }
-            catch (Exception e) { Debug.LogWarning($"[DeathRewind] 锚点 {anchor.Id} 载荷落盘失败: {e.Message}"); }
+            // ES3Settings.location = File 时，ES3.Save 直接写盘，**不需要** StoreCachedFile
+            // （StoreCachedFile 只会去找缓存里的文件，文件已直接落盘时会抛 "could not be found in the cache"）
         }
 
         /// <summary>

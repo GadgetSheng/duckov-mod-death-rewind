@@ -268,7 +268,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GAME_DIR="${GAME_DIR:-/Users/gadget/Library/Application Support/Steam/steamapps/common/Escape from Duckov}"
 MANAGED_DIR="$GAME_DIR/Duckov.app/Contents/Resources/Data/Managed"
-MODS_DIR="${MODS_DIR:-$GAME_DIR/Duckov.app/Contents/Resources/Data/Mods/DeathRewind}"
+MODS_DIR="${MODS_DIR:-$GAME_DIR/Duckov.app/Contents/Mods/DeathRewind}"
 
 bash "$ROOT/tools/fetch-harmony.sh"
 bash "$ROOT/tools/check-core-purity.sh"
@@ -1087,7 +1087,7 @@ namespace DeathRewind.Config
         // macOS: Application.dataPath = <app>/Contents/Resources/Data
         //      → ../../ModConfig = <app>/Contents/ModConfig（与游戏现有 ModConfig 目录一致）
         public static string FilePath =>
-            Path.GetFullPath(Path.Combine(Application.dataPath, "../../ModConfig/DeathRewind/config.txt"));
+            Path.GetFullPath(Path.Combine(Application.dataPath, "ModConfig/DeathRewind/config.txt"));
 
         public static ModConfig Load()
         {
@@ -2686,7 +2686,7 @@ git commit -m "feat(harmony): 接管敌人销毁以支持复活"
 - [ ] **Step 1: 部署**
 
 Run: `bash tools/build.sh`
-Expected: 输出 `OK: Core purity`、构建成功、`deployed to .../Contents/Resources/Data/Mods/DeathRewind`，并列出 `DeathRewind.dll`、`info.ini`、`preview.png`、`0Harmony.dll`（恰好一份）。
+Expected: 输出 `OK: Core purity`、构建成功、`deployed to .../Contents/Mods/DeathRewind`，并列出 `DeathRewind.dll`、`info.ini`、`preview.png`、`0Harmony.dll`（恰好一份）。
 
 - [ ] **Step 2: 确认游戏能发现该 Mod**
 

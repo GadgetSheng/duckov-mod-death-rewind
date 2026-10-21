@@ -51,8 +51,13 @@ namespace DeathRewind.Unity
             try { data = Parse(Capture(inventory)); }
             catch { return false; }
             if (data == null) return false;
+            // InventoryData.FromInventory 会跳过空槽，因此这里也要按"非空物品数"比较，
+            // 否则背包里有空洞时会把正常情况误判为自检失败。
+            int count = 0;
             var content = inventory.Content;
-            int count = content == null ? 0 : content.Count;
+            if (content != null)
+                foreach (var item in content)
+                    if (item != null) count++;
             return data.entries != null && data.entries.Count == count;
         }
     }
