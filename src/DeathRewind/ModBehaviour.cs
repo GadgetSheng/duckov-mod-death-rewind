@@ -22,6 +22,7 @@ namespace DeathRewind
         private AnchorBuilder _builder;
         private WorldRestorer _restorer;
         private double _nextSampleAt;
+        private double? _levelStartTick;
         private bool _timeScaleOwned;
 
         // 对外暴露（DeathInterceptor 需要）
@@ -115,6 +116,7 @@ namespace DeathRewind
             _store.Clear();
             _sampler.ResetRegistry();
             _nextSampleAt = _clock.CurrentTick;
+            _levelStartTick = _clock.CurrentTick;
             Debug.Log($"[DeathRewind] level started: anchors/rewindCount/store reset at tick={_clock.CurrentTick}");
         }
 
@@ -146,7 +148,22 @@ namespace DeathRewind
         private void HandleDebugHotkeys()
         {
             if (!_config.DebugMode) return;
-            if (!Input.GetKeyDown(KeyCode.F10)) return;
+            if (Input.GetKeyDown(KeyCode.F10)) TriggerDebugDeath();
+            if (_config.DebugAutoDeathAfter > 0 && _levelStartTick.HasValue)
+            {
+                double elapsed = _clock.CurrentTick - _levelStartTick.Value;
+                if (elapsed >= _config.DebugAutoDeathAfter)
+                {
+                    _levelStartTick = null;   // 只触发一次
+                    Debug.Log($"[DeathRewind] debug auto death after {elapsed:0.0}s");
+                    TriggerDebugDeath();
+                }
+            }
+        }
+
+        /// <summary>调试用：给自己造成致命伤害，走完整死亡链路。</summary>
+        private void TriggerDebugDeath()
+        {
             var player = LevelManager.Instance?.MainCharacter;
             if (player == null) return;
             player.Health.Hurt(new DamageInfo

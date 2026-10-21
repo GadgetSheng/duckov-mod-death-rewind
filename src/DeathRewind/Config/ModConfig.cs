@@ -20,6 +20,8 @@ namespace DeathRewind.Config
         public bool DebugMode;
         public string ForceFailPhase = "";
         public bool LogVerbose;
+        /// <summary>调试用：进入关卡 N 秒后自动触发一次自身死亡（0 = 关闭）。仅 debugMode 生效。</summary>
+        public double DebugAutoDeathAfter = 0;
 
         // macOS 实测：Application.dataPath = <app>/Contents（ModManager 扫描 <app>/Contents/Mods 可证），
         // 因此 Mod 配置目录是 <app>/Contents/ModConfig/<ModName>/（与游戏现有 ModConfig 目录一致）。
@@ -54,6 +56,7 @@ namespace DeathRewind.Config
                 cfg.DebugMode = GetBool(raw, "debugMode", cfg.DebugMode);
                 cfg.ForceFailPhase = GetString(raw, "forceFailPhase", cfg.ForceFailPhase);
                 cfg.LogVerbose = GetBool(raw, "logVerbose", cfg.LogVerbose);
+                cfg.DebugAutoDeathAfter = GetDouble(raw, "debugAutoDeathAfter", cfg.DebugAutoDeathAfter);
             }
             cfg.Validate();
             return cfg;
