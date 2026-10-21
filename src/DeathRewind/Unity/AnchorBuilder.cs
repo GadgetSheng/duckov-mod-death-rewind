@@ -39,9 +39,11 @@ namespace DeathRewind.Unity
 
         public Anchor Build(int id, double absTimestamp, double gridTimestamp)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             // 1) 元系统刷新：让主存档反映锚点时刻的 EXP/任务/经济
             SavesSystem.CollectSaveData();
             SavesSystem.SaveFile();
+            long afterSave = sw.ElapsedMilliseconds;
 
             var anchor = new Anchor
             {
@@ -49,12 +51,13 @@ namespace DeathRewind.Unity
                 AbsTimestamp = absTimestamp,
                 GridTimestamp = gridTimestamp,
                 Player = _store.GetPlayer()?.Clone(),
-                World = new WorldState { TimeOfDay = ReadWorldTime() },
+                World = new WorldState { TimeOfDay = WorldTime() },
             };
 
             foreach (var key in _store.EnemyKeys) anchor.Enemies[key] = _store.GetEnemy(key)?.Clone();
             foreach (var key in _store.ContainerKeys) anchor.Containers[key] = _store.GetContainer(key)?.Clone();
             foreach (var key in _store.DoorKeys) anchor.Doors[key] = _store.GetDoor(key)?.Clone();
+            long afterClone = sw.ElapsedMilliseconds;
 
             // 2) 载荷与主存档副本落盘（文件名与锚点 Id 对应）
             anchor.ContainerPayloadPath = AnchorPayloadPath(id);
@@ -71,7 +74,20 @@ namespace DeathRewind.Unity
                 Debug.LogError($"[DeathRewind] 锚点 {id} 落盘失败: {e.Message}");
             }
             VerifyPayloads(anchor);
+            long total = sw.ElapsedMilliseconds;
+            Debug.Log($"[DeathRewind] 锚点 {id} 构建耗时: 元系统刷新 {afterSave}ms / 状态深拷贝 {afterClone - afterSave}ms / 落盘 {total - afterClone}ms / 合计 {total}ms");
             return anchor;
+        }
+
+        /// <summary>当前世界时间（小时）。TimeOfDayController.Time 是实例属性，取不到时返回 0。</summary>
+        private static float WorldTime()
+        {
+            try
+            {
+                var tod = TimeOfDayController.Instance ?? LevelManager.Instance?.TimeOfDayController;
+                return tod != null ? tod.Time : 0f;
+            }
+            catch { return 0f; }
         }
 
         /// <summary>往返自检：载荷 Capture→Parse 后条目数必须一致（构建锚点时调用一次）。</summary>
