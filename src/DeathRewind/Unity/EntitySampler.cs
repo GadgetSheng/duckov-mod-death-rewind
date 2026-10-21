@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using DeathRewind.Core;
+using ItemStatsSystem;
 using UnityEngine;
 
 namespace DeathRewind.Unity
@@ -14,6 +15,7 @@ namespace DeathRewind.Unity
         private readonly Dictionary<GameObject, string> _enemyObjects = new Dictionary<GameObject, string>();
         private readonly Dictionary<Health, AICharacterController> _enemyControllers = new Dictionary<Health, AICharacterController>();
         private readonly Dictionary<DamageReceiver, string> _receiverIds = new Dictionary<DamageReceiver, string>();
+        private readonly HashSet<Item> _enemyItems = new HashSet<Item>();
         private readonly Dictionary<Door, string> _doorIds = new Dictionary<Door, string>();
         private readonly Dictionary<string, double> _registeredAt = new Dictionary<string, double>();
         private readonly HashSet<string> _anchorCovered = new HashSet<string>();
@@ -108,6 +110,24 @@ namespace DeathRewind.Unity
             if (ai != null) _enemyControllers[health] = ai;
             var receiver = FindDamageReceiver(health);
             if (receiver != null) _receiverIds[receiver] = id;
+            // 记录敌人的 CharacterItem：敌人死亡时游戏会把装备丢进尸体箱，
+            // 复活后就没装备了。这里登记后由 EnemyLootboxPatch 阻止那次丢弃。
+            var character = CharacterOf(health);
+            if (character != null && character.CharacterItem != null) _enemyItems.Add(character.CharacterItem);
+        }
+
+        /// <summary>取某个 Health 所属的角色。</summary>
+        private static CharacterMainControl CharacterOf(Health health)
+        {
+            if (health == null) return null;
+            try { return health.TryGetCharacter(); } catch { return null; }
+        }
+
+        /// <summary>该物品是否是某个敌人的角色物品（用于阻止敌人死亡时丢装备）。</summary>
+        public bool IsEnemyItem(Item item)
+        {
+            if (item == null) return false;
+            return _enemyItems.Contains(item);
         }
 
         /// <summary>
@@ -378,6 +398,15 @@ namespace DeathRewind.Unity
             foreach (var kv in _enemyIds)
                 if (kv.Value == id && kv.Key != null) return FindDamageReceiver(kv.Key);
             return null;
+        }
+
+        /// <summary>按稳定 ID 取敌人角色（采集物品载荷用）；对象已销毁时返回 null。</summary>
+        public CharacterMainControl GetEnemyCharacter(string id)
+        {
+            var h = GetEnemyHealth(id);
+            if (h == null) return null;
+            try { return h.TryGetCharacter(); }
+            catch { return null; }
         }
 
         /// <summary>玩家的 DamageReceiver（敌人的索敌对象通常是它）。</summary>

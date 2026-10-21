@@ -27,6 +27,7 @@ namespace DeathRewind.Unity
         private readonly Config.ModConfig _config;
         private readonly LiveStateStore _store;
         private readonly AnchorRing _ring;
+        private readonly EntitySampler _sampler;
 
         /// <summary>上次采集时各容器的内容指纹（用于跳过未变化容器的重复序列化）。</summary>
         private readonly Dictionary<string, int> _lastFingerprints = new Dictionary<string, int>();
@@ -34,11 +35,12 @@ namespace DeathRewind.Unity
         /// <summary>上次采集时各容器的载荷（内容未变化时直接复用）。</summary>
         private readonly Dictionary<string, byte[]> _lastPayloads = new Dictionary<string, byte[]>();
 
-        public AnchorBuilder(Config.ModConfig config, LiveStateStore store, AnchorRing ring)
+        public AnchorBuilder(Config.ModConfig config, LiveStateStore store, AnchorRing ring, EntitySampler sampler = null)
         {
             _config = config;
             _store = store;
             _ring = ring;
+            _sampler = sampler;
         }
 
         /// <summary>锚点文件根目录：&lt;Application.persistentDataPath&gt;/ModRewind（mod 私有数据目录）。</summary>
@@ -67,10 +69,43 @@ namespace DeathRewind.Unity
                 Id = id,
                 AbsTimestamp = absTimestamp,
                 GridTimestamp = gridTimestamp,
+                SceneKey = LevelAccess.CurrentSceneKey,
                 Player = _store.GetPlayer()?.Clone(),
                 World = new WorldState { TimeOfDay = WorldTime() },
             };
-            foreach (var key in _store.EnemyKeys) anchor.Enemies[key] = _store.GetEnemy(key)?.Clone();
+            // 缩略图：抓一帧画面（失败不影响锚点本身）
+            anchor.PreviewPng = ThumbnailCapture.Capture();
+
+            // 玩家装备槽载荷：CharacterItem 的槽位（护甲/头盔/手持武器等）不在背包 Inventory 里，
+            // 背包载荷覆盖不到，必须单独采集（只在锚点构建时做一次，逐 tick 采集太贵）。
+            if (anchor.Player != null)
+            {
+                try { anchor.Player.Slots = InventoryPayload.CaptureSlots(LevelAccess.MainCharacter?.CharacterItem); }
+                catch (Exception e) { Debug.LogWarning($"[DeathRewind] 玩家装备槽采集失败: {e.Message}"); }
+            }
+
+            foreach (var key in _store.EnemyKeys)
+            {
+                var st = _store.GetEnemy(key)?.Clone();
+                if (st == null) continue;
+                // 敌人物品载荷：死亡时游戏会把死者物品整体搬进战利品箱（CreateFromItem → Detach），
+                // 直接复活会得到空手敌人，必须采集锚点时刻的背包与装备槽（只对活着的敌人采集）。
+                if (st.Alive)
+                {
+                    try
+                    {
+                        var cm = _sampler?.GetEnemyHealth(key)?.TryGetCharacter();
+                        var charItem = cm?.CharacterItem;
+                        if (charItem != null)
+                        {
+                            st.ItemPayload = InventoryPayload.Capture(charItem.Inventory);
+                            st.Slots = InventoryPayload.CaptureSlots(charItem);
+                        }
+                    }
+                    catch (Exception e) { Debug.LogWarning($"[DeathRewind] 敌人 {key} 物品采集失败: {e.Message}"); }
+                }
+                anchor.Enemies[key] = st;
+            }
             foreach (var key in _store.DoorKeys) anchor.Doors[key] = _store.GetDoor(key)?.Clone();
             ctx.Anchor = anchor;
 

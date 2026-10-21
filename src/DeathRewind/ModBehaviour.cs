@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using DeathRewind.Config;
 using DeathRewind.Core;
 using DeathRewind.Harmony;
-using DeathRewind.UI;
 using DeathRewind.Unity;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
@@ -25,11 +23,20 @@ namespace DeathRewind
         private AnchorBuildContext _pendingBuild;
         private double _nextSampleAt;
         private double? _levelStartTick;
+        private Anchor _levelStartAnchor;
+        private bool _needLevelStartAnchor;
+        private string _lastSceneKey;
         private bool _timeScaleOwned;
 
         // 对外暴露（DeathInterceptor 需要）
         public AnchorRing Ring => _ring;
         public double CurrentTick => _clock?.CurrentTick ?? 0;
+
+        /// <summary>本关卡开始时刻（有效 tick）。用于"进图不足窗口长度 → 回到进图那一刻"。</summary>
+        public double LevelStartTick => _levelStartTick ?? 0;
+
+        /// <summary>本关卡的"起点锚点"（进图时刻的状态）。</summary>
+        public Anchor LevelStartAnchor => _levelStartAnchor;
         public ModConfig Config => _config;
 
         protected override void OnAfterSetup()
@@ -43,7 +50,7 @@ namespace DeathRewind
             // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
-            _builder = new AnchorBuilder(_config, _store, _ring);
+            _builder = new AnchorBuilder(_config, _store, _ring, _sampler);   // 锚点采集需要按 ID 找回敌人物品
             _restorer = new WorldRestorer(_config, _ring, _store);
             _restorer.SetSampler(_sampler);   // 恢复差量表需要按稳定 ID 找回敌人/门对象
 
@@ -56,8 +63,23 @@ namespace DeathRewind
             _hooks.OnLevelEnded += HandleLevelEnded;
             _hooks.Install();
 
-            DeathInterceptor.Install(this, _config, _restorer);
-            EnemyPersistencePatch.Install(_sampler);
+            try
+            {
+                DeathInterceptor.Install(this, _config, _restorer);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DeathRewind] DeathInterceptor install failed: {e}");
+            }
+            try
+            {
+                EnemyPersistencePatch.Install(_sampler);
+            EnemyLootboxPatch.Install(_sampler);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DeathRewind] EnemyPersistencePatch install failed: {e}");
+            }
             Debug.Log("[DeathRewind] initialized");
         }
 
@@ -90,6 +112,25 @@ namespace DeathRewind
                 {
                     _pendingBuild = _builder.BeginBuild(_ring.AllocateId(), _clock.CurrentTick, due.Value);
                 }
+                else if (_needLevelStartAnchor && LevelAccess.LevelReady && _pendingBuild == null)
+                {
+                    // 进图立刻建一个"起点锚点"：进图不足回溯窗口长度时，回退目标就是它
+                    _needLevelStartAnchor = false;
+                    _pendingBuild = _builder.BeginBuild(_ring.AllocateId(), _clock.CurrentTick, _levelStartTick ?? _clock.CurrentTick);
+                }
+            }
+
+            // 地图切换：立刻重置回溯历史（不允许回溯到别的地图的锚点）
+            string sceneKey = LevelAccess.CurrentSceneKey;
+            if (_lastSceneKey == null) _lastSceneKey = sceneKey;
+            else if (_lastSceneKey != sceneKey)
+            {
+                _lastSceneKey = sceneKey;
+                _ring.Clear();
+                _pendingBuild = null;
+                _sampler.ResetRegistry();
+                _builder?.ResetCache();
+                Debug.Log($"[DeathRewind] 地图切换（{sceneKey}），回溯历史已重置");
             }
 
             // 推进正在进行的锚点构建：采集分帧进行，文件 IO 在后台线程
@@ -107,21 +148,19 @@ namespace DeathRewind
                     {
                         var evicted = new List<Anchor>();
                         _ring.Insert(anchor, evicted);
-                        foreach (var old in evicted) _sampler.ReleaseAnchor(old);
+                        foreach (var old in evicted)
+                        {
+                            _sampler.ReleaseAnchor(old);
+                            if (old == _levelStartAnchor) _levelStartAnchor = null;   // 起点锚点出环后不可再回溯到它
+                        }
                         _sampler.SetAnchorCoverage(_ring.Anchors);
+                        if (_levelStartAnchor == null) _levelStartAnchor = anchor;   // 第一个锚点 = 进图那一刻
                         Debug.Log($"[DeathRewind] anchor created id={anchor.Id} gridTs={anchor.GridTimestamp} absTs={anchor.AbsTimestamp}");
                     }
                 }
             }
 
-            HandlePromptHotkeys();
             HandleDebugHotkeys();
-        }
-
-        /// <summary>IMGUI 只能在 OnGUI 中调用（Update 里调用会每帧抛异常）。</summary>
-        private void OnGUI()
-        {
-            RewindPrompt.Draw();
         }
 
         private void HandleLevelStarted()
@@ -135,6 +174,8 @@ namespace DeathRewind
             _pendingBuild = null;
             _nextSampleAt = _clock.CurrentTick;
             _levelStartTick = _clock.CurrentTick;
+            _levelStartAnchor = null;
+            _needLevelStartAnchor = true;   // 进图立刻建起点锚点
             Debug.Log($"[DeathRewind] level started: anchors/rewindCount/store reset at tick={_clock.CurrentTick}");
         }
 
@@ -154,13 +195,6 @@ namespace DeathRewind
             _sampler.ResetRegistry();
             AnchorBuilder.DeleteAllAnchorFiles();
             Debug.Log("[DeathRewind] level ended: state cleared");
-        }
-
-        private void HandlePromptHotkeys()
-        {
-            if (!RewindPrompt.IsOpen) return;
-            if (Input.GetKeyDown(ParseKey(_config.RewindHotkey))) RewindPrompt.Submit(true);
-            if (Input.GetKeyDown(ParseKey(_config.ContinueHotkey))) RewindPrompt.Submit(false);
         }
 
         private void HandleDebugHotkeys()
@@ -216,8 +250,11 @@ namespace DeathRewind
             }
         }
 
-        private static KeyCode ParseKey(string name)
-            => string.IsNullOrWhiteSpace(name) ? KeyCode.None : (KeyCode)System.Enum.Parse(typeof(KeyCode), name, true);
+        private void OnGUI()
+        {
+            // 死亡裁决面板（IMGUI 不受 timeScale=0 影响）
+            DeathInterceptor.DrawPrompt();
+        }
 
         // timeScale 收口：任何退出拦截面板的路径都必须经过这里
         public void FreezeTimeScale()

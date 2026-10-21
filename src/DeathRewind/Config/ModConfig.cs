@@ -9,9 +9,9 @@ namespace DeathRewind.Config
     public sealed class ModConfig
     {
         public bool Enabled = true;
-        public double AnchorInterval = 60;
+        public double AnchorInterval = 15;
         public int AnchorCount = 4;
-        public double MinRewindAge = 120;
+        public double MinRewindAge = 60;
         public int MaxRewinds = 3;
         public double SampleInterval = 0.25;
         public bool AutoRewind;

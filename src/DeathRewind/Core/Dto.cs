@@ -10,6 +10,8 @@ namespace DeathRewind.Core
         public float Health;
         public bool Alive;
         public byte[] BagPayload;
+        /// <summary>角色物品（CharacterItem）上的装备/武器槽内容（锚点构建时采集）。</summary>
+        public ItemSlotPayload[] Slots = Array.Empty<ItemSlotPayload>();
 
         public PlayerState Clone() => new PlayerState
         {
@@ -18,7 +20,15 @@ namespace DeathRewind.Core
             Health = Health,
             Alive = Alive,
             BagPayload = BagPayload == null ? null : (byte[])BagPayload.Clone(),
+            Slots = Slots == null ? Array.Empty<ItemSlotPayload>() : (ItemSlotPayload[])Slots.Clone(),
         };
+    }
+
+    /// <summary>角色物品上某个槽位的内容载荷（装备/手持武器等）。</summary>
+    public sealed class ItemSlotPayload
+    {
+        public string Name;
+        public byte[] Payload;
     }
 
     public sealed class EnemyState
@@ -30,6 +40,11 @@ namespace DeathRewind.Core
         public string AiTargetId;
         /// <summary>AI 是否已察觉目标（回退时写回，避免敌人停在"困惑/问号"状态）。</summary>
         public bool Noticed;
+        /// <summary>敌人背包载荷（锚点构建时采集）。死亡时游戏会把物品整体搬进战利品箱，
+        /// 复活后必须按此载荷重建，否则得到空手敌人。</summary>
+        public byte[] ItemPayload;
+        /// <summary>敌人装备/武器槽载荷（锚点构建时采集）。</summary>
+        public ItemSlotPayload[] Slots = Array.Empty<ItemSlotPayload>();
 
         public EnemyState Clone() => new EnemyState
         {
@@ -39,6 +54,8 @@ namespace DeathRewind.Core
             Alive = Alive,
             AiTargetId = AiTargetId,
             Noticed = Noticed,
+            ItemPayload = ItemPayload == null ? null : (byte[])ItemPayload.Clone(),
+            Slots = Slots == null ? Array.Empty<ItemSlotPayload>() : (ItemSlotPayload[])Slots.Clone(),
         };
     }
 
@@ -119,6 +136,10 @@ namespace DeathRewind.Core
         public double AbsTimestamp;   // 有效 tick 域
         public double GridTimestamp;  // 网格时间戳
         public bool Consumed;
+        /// <summary>锚点所属地图标识：切换地图后不允许回溯到别的地图的锚点。</summary>
+        public string SceneKey;
+        /// <summary>锚点时刻的缩略图（PNG 字节），用于回退确认界面展示位置。</summary>
+        public byte[] PreviewPng;
         public string ContainerPayloadPath;
         public string MainSaveCopyPath;
         public PlayerState Player;

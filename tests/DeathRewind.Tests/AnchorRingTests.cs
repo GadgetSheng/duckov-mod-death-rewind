@@ -84,7 +84,7 @@ namespace DeathRewind.Tests
         }
 
         [Fact]
-        public void CommitRewind_ConsumesTarget_RemovesYounger_KeepsOlder()
+        public void CommitRewind_KeepsTargetSelectable_RemovesYounger()
         {
             var ring = new AnchorRing(4, 120.0, 3, 60.0);
             var evicted = new List<Anchor>();
@@ -99,15 +99,16 @@ namespace DeathRewind.Tests
             ring.CommitRewind(target, removed);
 
             Assert.Equal(1, ring.RewindCount);
-            Assert.True(target.Consumed);
+            // 目标锚点不标记 Consumed：回溯后它仍是有效历史状态，可被下一次死亡再次选中
+            Assert.False(target.Consumed);
             Assert.Single(removed);
             Assert.Equal(180.0, removed[0].AbsTimestamp);
 
-            // 更早的锚点仍可作为下一次回退目标
+            // 下一次回退目标：环内最新的达标锚点（即刚回溯过的 target，而非更老的锚点）
             ring.SetTick(300.0);
             var next = ring.SelectTarget();
             Assert.NotNull(next);
-            Assert.Equal(60.0, next.AbsTimestamp);
+            Assert.Equal(120.0, next.AbsTimestamp);
         }
 
         [Fact]

@@ -1,7 +1,10 @@
+using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using DeathRewind.Core;
 using ItemStatsSystem;
 using ItemStatsSystem.Data;
+using ItemStatsSystem.Items;
 using UnityEngine;
 
 namespace DeathRewind.Unity
@@ -59,6 +62,90 @@ namespace DeathRewind.Unity
                 foreach (var item in content)
                     if (item != null) count++;
             return data.entries != null && data.entries.Count == count;
+        }
+
+        // ------------------------------------------------------------------ 物品树 / 装备槽
+
+        /// <summary>把单个物品（含整棵子树：挂件、槽位内容、变量）序列化为载荷。</summary>
+        public static byte[] CaptureItem(Item item)
+        {
+            if (item == null) return null;
+            try
+            {
+                return Encoding.UTF8.GetBytes(JsonUtility.ToJson(ItemTreeData.FromItem(item)));
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[DeathRewind] 物品载荷采集失败: {e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>从载荷重建物品实例（含子树）。</summary>
+        public static async System.Threading.Tasks.Task<Item> InstantiateItemAsync(byte[] payload)
+        {
+            if (payload == null || payload.Length == 0) return null;
+            try
+            {
+                var tree = JsonUtility.FromJson<ItemTreeData>(Encoding.UTF8.GetString(payload));
+                if (tree == null) return null;
+                return await ItemTreeData.InstantiateAsync(tree);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[DeathRewind] 物品载荷重建失败: {e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>采集角色物品上所有非空槽位（装备/手持武器）的内容载荷。</summary>
+        public static ItemSlotPayload[] CaptureSlots(Item item)
+        {
+            if (item == null || item.Slots == null) return System.Array.Empty<ItemSlotPayload>();
+            var list = new List<ItemSlotPayload>();
+            foreach (Slot slot in item.Slots)
+            {
+                if (slot == null) continue;
+                var content = slot.Content;
+                if (content == null) continue;
+                list.Add(new ItemSlotPayload { Name = slot.Key, Payload = CaptureItem(content) });
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>
+        /// 还原角色物品的槽位内容：旧内容销毁、按载荷重建并 Plug 回去。
+        /// 返回 false 表示至少一个槽位未还原成功（调用方记为未覆盖，不中断回退）。
+        /// </summary>
+        public static async System.Threading.Tasks.Task<bool> ApplySlotsAsync(ItemSlotPayload[] slots, Item target)
+        {
+            if (slots == null || slots.Length == 0) return true;
+            if (target == null) return false;
+            bool allOk = true;
+            foreach (var sp in slots)
+            {
+                if (sp == null || sp.Payload == null || string.IsNullOrEmpty(sp.Name)) continue;
+                try
+                {
+                    var item = await InstantiateItemAsync(sp.Payload);
+                    if (item == null) { allOk = false; continue; }
+                    var collection = target.Slots;
+                    if (collection == null) { allOk = false; continue; }
+                    Slot slot = null;
+                    try { slot = collection[sp.Name]; } catch { /* 槽位不存在 */ }
+                    if (slot == null) { allOk = false; continue; }
+
+                    // Plug 会把旧内容顶出来（只 Detach 不销毁），需要手动销毁避免游离物品
+                    if (slot.Plug(item, out var unplugged) && unplugged != null)
+                        Object.Destroy(unplugged.gameObject);
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"[DeathRewind] 槽位 {sp.Name} 还原失败: {e.Message}");
+                    allOk = false;
+                }
+            }
+            return allOk;
         }
     }
 }

@@ -88,11 +88,14 @@ namespace DeathRewind.Core
 
         public bool CanRewind() => RewindCount < _maxRewinds && SelectTarget() != null;
 
-        /// <summary>回退成功：消耗目标锚点、移除更年轻的锚点（被丢弃时间线）、递增计数。</summary>
+        /// <summary>
+        /// 回退成功：移除更年轻的锚点（被丢弃时间线）、递增计数。
+        /// 目标锚点**不标记 Consumed**：回溯后世界回到锚点时刻，它仍是有效的历史状态，
+        /// 保留在环里可以让下一次死亡继续回溯（否则回溯后立即死亡时无锚点可选，表现为"只能复活一次"）。
+        /// </summary>
         public void CommitRewind(Anchor target, List<Anchor> removed)
         {
             if (target == null) return;
-            target.Consumed = true;
             RewindCount++;
             for (int i = _anchors.Count - 1; i >= 0; i--)
             {

@@ -78,7 +78,7 @@ namespace DeathRewind.Unity
             if (!PhaseA(anchor)) return false;                       // A 失败：什么都没改，直接放弃回退
             if (!PhaseB(anchor)) { await PhaseFAsync(anchor); return false; }
             if (!await PhaseCAsync(anchor)) { await PhaseFAsync(anchor); return false; }
-            if (!PhaseD(anchor)) { await PhaseFAsync(anchor); return false; }
+            if (!await PhaseDAsync(anchor)) { await PhaseFAsync(anchor); return false; }
             if (!await PhaseEAsync(anchor)) { await PhaseE6Async(); await PhaseFAsync(anchor); return false; }
 
             // 成功收尾：实时状态整体替换为锚点状态（规格 §6.7）
@@ -286,6 +286,11 @@ namespace DeathRewind.Unity
                 var map = LevelAccess.LootBoxInventories;
                 if (map != null)
                 {
+                    // 0) 锚点之后新出现的战利品箱（锚点后死亡角色的掉落）→ 直接销毁，
+                    //    否则"已死敌人的掉落"会残留在回溯后的世界里。被复活敌人的物品
+                    //    改由锚点载荷重建（阶段 D），因此销毁箱子不会造成物品丢失。
+                    DestroyLootBoxesNotInAnchor(anchor, map);
+
                     // 载荷来源：优先内存中的锚点载荷，缺失时回落到锚点载荷文件（只读一次）
                     AnchorBuilder.TryLoadPayloads(anchor, out var filePayloads, out _);
 
@@ -342,16 +347,52 @@ namespace DeathRewind.Unity
             return null;
         }
 
+        /// <summary>
+        /// 销毁锚点时刻不存在的战利品箱：角色死亡会把死者物品整体搬进战利品箱（CreateFromItem），
+        /// 锚点后击杀产生的箱子在回溯后属于"多余世界状态"。被复活敌人的物品改由锚点载荷重建，
+        /// 因此销毁箱子不会造成物品丢失。
+        /// </summary>
+        private static void DestroyLootBoxesNotInAnchor(Anchor anchor, Dictionary<int, Inventory> map)
+        {
+            MethodInfo getKey = null;
+            try
+            {
+                getKey = typeof(InteractableLootbox).GetMethod("GetKey", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            }
+            catch { /* 反射失败：跳过清理，避免误删 */ }
+            if (getKey == null)
+            {
+                Debug.LogWarning("[DeathRewind] InteractableLootbox.GetKey 反射失败，跳过多余战利品箱清理");
+                return;
+            }
+
+            int removed = 0;
+            var boxes = UnityEngine.Object.FindObjectsByType<InteractableLootbox>(FindObjectsSortMode.None);
+            foreach (var box in boxes)
+            {
+                if (box == null) continue;
+                int key;
+                try { key = (int)getKey.Invoke(box, null); }
+                catch { continue; }
+                if (anchor.Containers.ContainsKey(ContainerKey(key))) continue;
+                // 先从注册表移除，避免后续遍历命中已销毁对象；再销毁本体（含箱内物品）
+                map.Remove(key);
+                UnityEngine.Object.Destroy(box.gameObject);
+                removed++;
+            }
+            if (removed > 0) Debug.Log($"[DeathRewind] restore phase=C 移除锚点后新增战利品箱 x{removed}");
+        }
+
         // ------------------------------------------------------------------ 阶段 D
 
-        private bool PhaseD(Anchor anchor)
+        private async Task<bool> PhaseDAsync(Anchor anchor)
         {
             bool ok = false;
             string error = null;
             try
             {
                 if (ForceFail("D")) throw new InvalidOperationException("forced failure at D");
-                ApplyEnemyDiff(anchor);
+                await ApplyEnemyDiffAsync(anchor);
                 ApplyDoorDiff(anchor);
                 ApplyWorldTime(anchor);
                 DestroyProjectiles();
@@ -372,13 +413,17 @@ namespace DeathRewind.Unity
             return true;
         }
 
-        /// <summary>正向差量表（锚点 A → 回退前实时 B）。</summary>
-        private void ApplyEnemyDiff(Anchor anchor)
+        /// <summary>
+        /// 正向差量表（锚点 A → 回退前实时 B）。
+        /// 复活的敌人还需按锚点重建物品与装备槽——死亡时物品已被整体搬进战利品箱。
+        /// </summary>
+        private async Task ApplyEnemyDiffAsync(Anchor anchor)
         {
             var ids = new HashSet<string>();
             foreach (var kv in anchor.Enemies) ids.Add(kv.Key);
             foreach (var key in _store.EnemyKeys) ids.Add(key);
 
+            var itemJobs = new List<KeyValuePair<string, EnemyState>>();
             foreach (var id in ids)
             {
                 anchor.Enemies.TryGetValue(id, out var a);
@@ -399,6 +444,9 @@ namespace DeathRewind.Unity
                     {
                         // 复活：AI 复位为 null（不写回锚点的 AI 目标）
                         ReviveEnemy(h, a, id);
+                        // 死亡时物品已被搬进战利品箱，需按锚点载荷重建背包与装备槽
+                        if ((a.ItemPayload != null && a.ItemPayload.Length > 0) || (a.Slots != null && a.Slots.Length > 0))
+                            itemJobs.Add(new KeyValuePair<string, EnemyState>(id, a));
                     }
                     else
                     {
@@ -408,11 +456,36 @@ namespace DeathRewind.Unity
                     continue;
                 }
 
-                // A 死或 A 无
-                if (missing || dead) continue;   // A 死 B 死 / A 无 B 无：无操作
+                if (a == null)
+                {
+                    // 锚点时刻尚不存在的敌人（锚点后刷出）：无论死活一律移除，
+                    // 否则"锚点后死亡的敌人尸体"会残留在回溯后的世界里。
+                    if (missing) continue;
+                    h.gameObject.SetActive(false);
+                    _sampler?.MarkDeferredDestroy(id);
+                    _enemiesChanged++;
+                    continue;
+                }
+
+                // A 死 / B 活
+                if (missing || dead) continue;   // A 死 B 死：无操作（保留尸体）
                 h.gameObject.SetActive(false);     // 移除：只停用，销毁推迟到提交成功后
                 _sampler?.MarkDeferredDestroy(id);
                 _enemiesChanged++;
+            }
+
+            // 复活敌人的物品与装备槽重建（非致命：失败记入未覆盖清单）
+            foreach (var job in itemJobs)
+            {
+                try
+                {
+                    await RestoreEnemyItemsAsync(job.Key, job.Value);
+                }
+                catch (Exception e)
+                {
+                    AddUncovered($"enemy:{job.Key}:items");
+                    Debug.LogWarning($"[DeathRewind] 敌人 {job.Key} 物品还原失败: {e.Message}");
+                }
             }
         }
 
@@ -463,6 +536,14 @@ namespace DeathRewind.Unity
             if (h == null) return;
             h.gameObject.SetActive(true);
             SetBoolField(h, "isDead", false);
+            // 死亡流程会把 hasHandledDeath 置 true（OnDead 只执行一次），
+            // 复活时必须复位，否则敌人无法重新进入正常战斗状态（不能攻击）。
+            try
+            {
+                var cm = h.TryGetCharacter();
+                if (cm != null) SetBoolField(cm, "hasHandledDeath", false);
+            }
+            catch { /* 忽略 */ }
             try { h.SetHealth(a != null ? a.Health : h.CurrentHealth); } catch { /* 忽略 */ }
             if (a != null)
             {
@@ -480,6 +561,23 @@ namespace DeathRewind.Unity
                 ai.SetTarget(null);
                 ai.noticed = false;
             }
+        }
+
+        /// <summary>按锚点载荷重建复活敌人的背包与装备槽（死亡时物品已被整体搬进战利品箱）。</summary>
+        private async Task<bool> RestoreEnemyItemsAsync(string id, EnemyState a)
+        {
+            if (a == null || string.IsNullOrEmpty(id)) return false;
+            var h = GetEnemyHealth(id);
+            if (h == null) return false;
+            var charItem = h.TryGetCharacter()?.CharacterItem;
+            if (charItem == null) return false;
+
+            bool ok = true;
+            if (a.ItemPayload != null && a.ItemPayload.Length > 0 && charItem.Inventory != null)
+                ok = await WithTimeout(InventoryPayload.ApplyAsync(a.ItemPayload, charItem.Inventory), PhaseTimeoutSeconds, "D") && ok;
+            if (a.Slots != null && a.Slots.Length > 0)
+                ok = await WithTimeout(InventoryPayload.ApplySlotsAsync(a.Slots, charItem), PhaseTimeoutSeconds, "D") && ok;
+            return ok;
         }
 
         /// <summary>门：按锚点状态强制开合（不触发事件）。</summary>
@@ -579,6 +677,16 @@ namespace DeathRewind.Unity
                     bool applied = await WithTimeout(InventoryPayload.ApplyAsync(payload, bag), PhaseTimeoutSeconds, "E2");
                     if (!applied) throw new InvalidOperationException("背包原地还原失败");
                 }
+
+                // 装备槽（护甲/头盔/手持武器及挂件）不在背包里；死亡流程会把它们 Detach 进掉落物，
+                // 必须按锚点载荷重建，否则回溯后瞄准镜等附件丢失。
+                // 注意：锚点后才加装的附件会随回溯消失（回溯语义：状态回到锚点时刻）。
+                var slots = anchor.Player?.Slots;
+                if (slots != null && slots.Length > 0 && main.CharacterItem != null)
+                {
+                    bool slotsOk = await WithTimeout(InventoryPayload.ApplySlotsAsync(slots, main.CharacterItem), PhaseTimeoutSeconds, "E2");
+                    if (!slotsOk) Debug.LogWarning("[DeathRewind] 玩家装备槽还原不完整（非致命）");
+                }
                 ok = true;
             }
             catch (Exception e)
@@ -654,6 +762,7 @@ namespace DeathRewind.Unity
                 error = e.Message;
             }
 
+            if (ok) RestorePlayerPresentation();
             if (!ok)
             {
                 if (error != null) Debug.LogError($"[DeathRewind] restore phase=E3 result=failed: {error}");
@@ -662,6 +771,37 @@ namespace DeathRewind.Unity
             }
             Log(RestorePhase.E3, "ok");
             return true;
+        }
+
+        /// <summary>
+        /// 复活后的"表现层"恢复：
+        /// ① Health / DamageReceiver 可能挂在子物体上，死亡时被 SetActive(false) → 需要一并激活；
+        /// ② 准星：原生 <c>AimMarker.Update</c> 只在玩家死亡时把 rootCanvasGroup.alpha 设为 0，
+        ///    恢复时**从不设回 1**（只有 Start() 会设）→ 复活后准星一直消失。
+        /// </summary>
+        private static void RestorePlayerPresentation()
+        {
+            var main = LevelManager.Instance?.MainCharacter;
+            if (main == null) return;
+            try
+            {
+                if (main.Health != null) main.Health.gameObject.SetActive(true);
+                var receiver = main.GetComponent<DamageReceiver>() ?? main.GetComponentInChildren<DamageReceiver>();
+                if (receiver != null) receiver.gameObject.SetActive(true);
+                main.gameObject.SetActive(true);
+
+                var aim = UnityEngine.Object.FindFirstObjectByType<AimMarker>();
+                if (aim != null && aim.rootCanvasGroup != null) aim.rootCanvasGroup.alpha = 1f;
+
+                var h = main.Health;
+                Debug.Log($"[DeathRewind] revive sanity: hp={h?.CurrentHealth} isDead={h?.IsDead} invincible={h?.Invincible} " +
+                          $"playerActive={main.gameObject.activeSelf} healthActive={h?.gameObject.activeSelf} " +
+                          $"crosshair={(aim != null && aim.rootCanvasGroup != null ? aim.rootCanvasGroup.alpha : -1f)}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[DeathRewind] 复活表现层恢复失败: {e.Message}");
+            }
         }
 
         /// <summary>E4：校验玩家确实活着。</summary>
