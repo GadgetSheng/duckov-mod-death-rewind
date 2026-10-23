@@ -51,6 +51,7 @@
 | **敌人复活后没有装备** | `CharacterMainControl.OnDead` 把角色物品转成尸体箱 | 新增 `EnemyLootboxPatch`：敌人的物品不生成尸体箱（玩家的照常掉落） |
 | **复活后"无敌"、准星消失** | `Health.Hurt` 遇 `isDead=true` 直接返回 false；原生 `AimMarker.Update` 只在死亡时把准星 alpha 设 0，**从不设回 1** | 复活时强制激活玩家/Health/DamageReceiver 物体、`isDead=false`、`SetInvincible(false)`，并显式恢复 `AimMarker.rootCanvasGroup.alpha = 1`；新增 `revive sanity` 日志 |
 | 锚点构建主线程卡顿 | `SavesSystem.SaveFile()` 写 ~1 MB + 备份；容器全量序列化 | 主线程分帧采集（预算 2ms/帧）+ 后台线程纯文件 IO + 未变化容器复用载荷；实测 2690ms → 0–2ms |
+| **Boss 突然消失**（零号区·矮鸭） | ① `EntitySampler.EvictStale` 把"处于停用状态"当成"已死可销毁"：游戏 `SetActiveByPlayerDistance` 会在玩家离开 100m 外时把角色根物体 `SetActive(false)`，Mod 在 80s 淘汰时把它 `Destroy` → Boss 永久消失（游戏的刷怪器不会再生成它）<br>② `full` 模式回退差量表把"锚点后刷出"的敌人一律移除 → 锚点前没刷出的 Boss 被删掉且不会再生<br>③ 敌人位姿写在 `Health` 所在物体上，Health 挂子物体时模型会被拽走 | ① 销毁资格收窄为"Mod 自己停用 + 当前停用"（`EnemyPolicy.CanDestroy`），游戏自己停用的只遗忘不销毁<br>② 回退跳过 `isBossCharacter` 的实体（保留并记入未覆盖清单）<br>③ 位姿/停用改写角色根物体；移除敌人时从 `SetActiveByPlayerDistance` 名单摘除，避免被游戏重新激活 |
 
 ## 待验证 ⏳
 
@@ -67,6 +68,7 @@
 - [ ] 耗尽降级（`no eligible anchor` / `rewind limit reached`）
 - [ ] 跨地图保护（切换地图后回溯历史被清空，无法回溯到上一张图）
 - [ ] 失败降级（`forceFailPhase=A..E` 各自注入，断言玩家仍死亡且元系统未变）
+- [ ] **Boss 不再消失**（零号区·矮鸭）：进入公路营地看到 Boss → 走开 >100m（游戏会把它停用）→ 停留 >80s → 回到营地，Boss 仍在（修复前会永久消失）；`full` 模式回退后 Boss 也仍在（`enemy:…:boss-kept`）
 
 自动化辅助开关（仅 `debugMode=true` 生效）：
 

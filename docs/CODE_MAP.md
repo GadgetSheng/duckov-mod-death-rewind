@@ -22,7 +22,8 @@ src/DeathRewind/
 │   ├── Dto.cs
 │   ├── RewindCandidate.cs
 │   ├── TimelineLayout.cs
-│   └── DeathPanelLayout.cs
+│   ├── DeathPanelLayout.cs
+│   └── EnemyPolicy.cs
 ├── Unity/                    Unity / 游戏 API 适配层
 │   ├── LevelHooks.cs
 │   ├── LevelAccess.cs
@@ -59,9 +60,10 @@ src/DeathRewind/
 | `DeathPanelLayout` | 纯函数的回溯控件布局计算 | `RectF`、`DeathPanelLayout.Result` |
 | `TimelineLayout` | 纯函数的时间轴几何（横条、节点、标签、拖拽吸附） | `Compute`、`NearestNode`、`TimelineLayout.Result` |
 | `RewindCandidate` | 结算界面的一个回溯候选节点（锚点 + 回溯年龄 + 缩略图） | `RewindCandidate` |
+| `EnemyPolicy` | 敌人对象生命周期策略（纯逻辑）：只销毁 Mod 自己停用的对象；Boss 不可被回退移除 | `CanDestroy`、`CanRemoveLateSpawned` |
 | `LevelHooks` | 订阅关卡/子场景/场景卸载/局结束事件并归一化为三个回调（子场景回调带场景名） | `OnLevelStarted`、`OnSubSceneLoaded(string)`、`OnLevelEnded` |
 | `LevelAccess` | 安全读取游戏静态状态（主角色、相机、容器表、场景键、加载态） | `MainCharacter`、`MainCamera`、`LootBoxInventories`、`CurrentSceneKey`、`LevelReady`、`MultiSceneLoading` |
-| `EntitySampler` | 定期采样玩家/敌人/容器/门；维护敌人稳定 Id 与死亡敌人登记；锚点覆盖关系 | `Sample`、`RegisterDeadEnemy`、`GetEnemyHealth`、`GetEnemyObject`、`ReleaseAnchor`、`SetAnchorCoverage`、`ResetRegistry`、`RefreshRegistry` |
+| `EntitySampler` | 定期采样玩家/敌人/容器/门；维护敌人稳定 Id、角色根物体与死亡敌人登记；锚点覆盖关系；**只销毁 Mod 自己停用的敌人** | `Sample`、`RegisterDeadEnemy`、`GetEnemyHealth`、`GetEnemyObject`、`GetEnemyRoot`、`IsBossEnemy`、`MarkDeferredDestroy`、`UnregisterFromDistanceStreaming`、`ReleaseAnchor`、`SetAnchorCoverage`、`ResetRegistry`、`RefreshRegistry` |
 | `AnchorBuilder` | 分帧构建锚点：采集 → 后台 IO 落盘 → 完成校验 | `BeginBuild`、`ContinueCapture`、`StartIo`、`IsIoCompleted`、`CompleteBuild`、`DeleteAllAnchorFiles`、`CleanupOrphanFiles` |
 | `AnchorBuildContext` | 单次锚点构建的分帧采集/异步 IO 状态载体 | `Anchor`、`CaptureDone`、`IoTask` 等 |
 | `WorldRestorer` | 执行差量恢复阶段 A–F，失败时反向补偿 | `RestoreAsync`、`SetDeathContext`、`PhaseA/B/C/D/E/E2/E3/E4/E6/F` |
@@ -351,3 +353,6 @@ bash tools/build.sh
 12. 原生「继续」按钮的位置与尺寸不得修改，避免父级布局组拉扯导致位移。
 13. 子场景（地道 / 独立房间 / Boss 房）重新加载即新实例：必须丢弃该场景的旧锚点与起点锚点，否则会把玩家回溯到上一次访问的位置（场景世界原点可能已随传送点变化）。
 14. 结算界面时间轴必须与真实可选的回溯目标一致：节点 = 可回溯锚点，预览图 = 该锚点时刻的画面，玩家选中哪个节点就回溯到哪个锚点。
+15. **不得销毁 Mod 没有亲手停用的敌人对象**：游戏 `SetActiveByPlayerDistance` 会在玩家离开 100m 外时把角色根物体 `SetActive(false)`（回来再激活），"停用"不等于"已死"。误销毁会让 Boss（如零号区·矮鸭）永久消失——游戏的刷怪器不会再生成它。销毁资格见 `EnemyPolicy.CanDestroy`。
+16. **回退不得移除 Boss**（`CharacterMainControl.isBossCharacter`）：Boss 是唯一实体，移除即永久丢失；回退只把它留在原地（记入未覆盖清单）。
+17. 敌人的位姿/停用必须作用在**角色根物体**上：Health 组件可能挂在子物体上，写子物体只会把模型拽走，表现为敌人"凭空消失"。

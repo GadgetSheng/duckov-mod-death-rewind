@@ -40,8 +40,9 @@ namespace DeathRewind.Harmony
             if (__instance.IsMainCharacterHealth) return true;
             bool isEnemy = EntitySampler.IsEnemyCharacter(__instance);
             if (!isEnemy) return true;
-            // Health 组件挂在角色的**子物体**上：原生 Health.Hurt 只停用子物体，角色本体仍然可见。
-            // 我们接管了销毁（不让它消失），若不额外停用角色本体，敌人就会变成"倒在地上不死不消"的样子。
+            // Health 组件可能与角色根物体不是同一个物体（不同敌人结构不同），
+            // 因此显式停用角色根物体：无论 Health 挂在根还是子物体上，敌人本体都会不可见，
+            // 不会变成"倒在地上不死不消"的样子。
             try
             {
                 var character = __instance.TryGetCharacter();

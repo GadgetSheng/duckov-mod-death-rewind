@@ -395,6 +395,14 @@ namespace DeathRewind.Unity
                 try { key = (int)getKey.Invoke(box, null); }
                 catch { continue; }
                 if (anchor.Containers.ContainsKey(ContainerKey(key))) continue;
+                // 只清理"登记在 LevelManager.LootBoxInventories 里"的箱子：只有这类箱子会被锚点采集，
+                // 才谈得上"锚点后新增"。带固定 inventoryReference 的箱子（场景预置内容）不在该表里，
+                // 锚点从未采集过它 → 不能销毁（销毁即永久丢失其场景内容）。
+                if (!map.ContainsKey(key))
+                {
+                    ModLog.Log($"[DeathRewind] 保留未登记战利品箱（锚点未采集）: key={key}");
+                    continue;
+                }
                 // 先从注册表移除，避免后续遍历命中已销毁对象；再销毁本体（含箱内物品）
                 map.Remove(key);
                 UnityEngine.Object.Destroy(box.gameObject);
@@ -478,10 +486,27 @@ namespace DeathRewind.Unity
 
                 if (a == null)
                 {
-                    // 锚点时刻尚不存在的敌人（锚点后刷出）：无论死活一律移除，
+                    // 锚点时刻尚不存在的敌人（锚点后刷出）：按差量表移除，
                     // 否则"锚点后死亡的敌人尸体"会残留在回溯后的世界里。
+                    // 例外：Boss 是唯一实体，游戏的刷怪器不会再次生成它 → 移除即永久消失，必须保留。
                     if (missing) continue;
-                    h.gameObject.SetActive(false);
+                    // 二次判定 late-spawned：FindObjectsByType 默认只返回 active 对象，
+                    // 锚点时刻被 SetActiveByPlayerDistance 暂时关闭的活怪不会被 AnchorBuilder 采集
+                    // （→ a=null），但它锚点时刻其实已经存在 → _registeredAt[id] < anchor.AbsTimestamp
+                    // → 不是 late-spawned，不能移除（否则游戏自己的距离启停活怪会被永久抹掉）。
+                    if (!_sampler.RegisteredAfterAnchor(id, anchor.AbsTimestamp))
+                    {
+                        AddUncovered($"enemy:{id}:inactive-before-anchor");
+                        ModLog.Log($"[DeathRewind] 保留锚点时刻已存在但 inactive 的敌人（游戏距离关停）: {id}");
+                        continue;
+                    }
+                    if (!EnemyPolicy.CanRemoveLateSpawned(IsBoss(id)))
+                    {
+                        AddUncovered($"enemy:{id}:boss-kept");
+                        ModLog.Log($"[DeathRewind] 回退保留 Boss 实体（不可移除）: {id}");
+                        continue;
+                    }
+                    DeactivateEnemy(h, id);
                     _sampler?.MarkDeferredDestroy(id);
                     _enemiesChanged++;
                     continue;
@@ -489,7 +514,13 @@ namespace DeathRewind.Unity
 
                 // A 死 / B 活
                 if (missing || dead) continue;   // A 死 B 死：无操作（保留尸体）
-                h.gameObject.SetActive(false);     // 移除：只停用，销毁推迟到提交成功后
+                if (!EnemyPolicy.CanRemoveLateSpawned(IsBoss(id)))
+                {
+                    AddUncovered($"enemy:{id}:boss-kept");
+                    ModLog.Log($"[DeathRewind] 回退保留 Boss 实体（不可移除）: {id}");
+                    continue;
+                }
+                DeactivateEnemy(h, id);        // 移除：只停用，销毁推迟到提交成功后
                 _sampler?.MarkDeferredDestroy(id);
                 _enemiesChanged++;
             }
@@ -517,13 +548,49 @@ namespace DeathRewind.Unity
             ApplyAiState(h, a, id);
         }
 
-        /// <summary>只写回位姿与血量。</summary>
+        /// <summary>
+        /// 停用敌人：Health 所在物体 + 角色根物体，并把它从游戏的"按玩家距离启停"名单里摘掉。
+        /// 只停用 Health 所在物体会留下一个站着的尸体（模型还在）；不摘除登记则玩家靠近时
+        /// 游戏会把它重新激活 → 移除失效。
+        /// </summary>
+        private void DeactivateEnemy(Health h, string id)
+        {
+            if (h == null) return;
+            h.gameObject.SetActive(false);
+            var root = _sampler?.GetEnemyRoot(id);
+            if (root != null && root != h.gameObject)
+            {
+                root.SetActive(false);
+                EntitySampler.UnregisterFromDistanceStreaming(root);
+            }
+        }
+
+        /// <summary>该敌人是否是 Boss（唯一实体，回退时不可移除）。</summary>
+        private bool IsBoss(string id) => _sampler != null && _sampler.IsBossEnemy(id);
+
+        /// <summary>
+        /// 只写回位姿与血量。位姿必须作用在**角色根物体**上：Health 组件可能挂在子物体上，
+        /// 写子物体只会把血条/模型拽走，角色本体留在原地（表现为敌人"凭空消失"）。
+        /// </summary>
         private static void WriteEnemyTransform(Health h, EnemyState a)
         {
             if (h == null || a == null) return;
-            h.transform.position = ToVector3(a.Position);
-            h.transform.rotation = ToQuaternion(a.Rotation);
+            var tr = EnemyTransform(h);
+            tr.position = ToVector3(a.Position);
+            tr.rotation = ToQuaternion(a.Rotation);
             try { h.SetHealth(a.Health); } catch { /* 血量写入失败不阻断差量表 */ }
+        }
+
+        /// <summary>敌人的位姿目标变换：优先角色根物体，退化到 Health 所在物体。</summary>
+        private static Transform EnemyTransform(Health h)
+        {
+            try
+            {
+                var character = h.TryGetCharacter();
+                if (character != null) return character.transform;
+            }
+            catch { /* 取不到就用 Health 所在物体 */ }
+            return h.transform;
         }
 
         /// <summary>
@@ -556,10 +623,15 @@ namespace DeathRewind.Unity
             if (h == null) return;
             h.gameObject.SetActive(true);
             // Health 挂在子物体上：角色根物体也要一起激活，否则敌人"活着但不可见/不可交互"
+            GameObject root = null;
             try
             {
                 var character = h.TryGetCharacter();
-                if (character != null) character.gameObject.SetActive(true);
+                if (character != null)
+                {
+                    character.gameObject.SetActive(true);
+                    root = character.gameObject;
+                }
             }
             catch { /* 忽略 */ }
             SetBoolField(h, "isDead", false);
@@ -574,9 +646,13 @@ namespace DeathRewind.Unity
             try { h.SetHealth(a != null ? a.Health : h.CurrentHealth); } catch { /* 忽略 */ }
             if (a != null)
             {
-                h.transform.position = ToVector3(a.Position);
-                h.transform.rotation = ToQuaternion(a.Rotation);
+                // 位姿写在角色根物体上（Health 可能在子物体上）
+                var tr = EnemyTransform(h);
+                tr.position = ToVector3(a.Position);
+                tr.rotation = ToQuaternion(a.Rotation);
             }
+            // 原生死亡流程会把它从"按玩家距离启停"名单里摘除，复活后重新登记回去
+            if (root != null) EntitySampler.RegisterToDistanceStreaming(root);
             var ai = id != null ? _sampler?.GetEnemyAi(id) : null;
             if (ai == null) ai = EntitySampler.FindAiController(h);
             if (ai == null) return;
@@ -1205,7 +1281,12 @@ namespace DeathRewind.Unity
 
                 // B 死 / B 无
                 if (missing || dead) continue;
-                h.gameObject.SetActive(false);
+                if (!EnemyPolicy.CanRemoveLateSpawned(IsBoss(id)))
+                {
+                    AddUncovered($"enemy:{id}:boss-kept");
+                    continue;
+                }
+                DeactivateEnemy(h, id);
                 _enemiesChanged++;
             }
         }

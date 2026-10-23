@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using DeathRewind.Core;
+using Duckov.Utilities;
 using ItemStatsSystem;
 using UnityEngine;
 
@@ -13,6 +14,10 @@ namespace DeathRewind.Unity
         private readonly double _anchorInterval;
         private readonly Dictionary<Health, string> _enemyIds = new Dictionary<Health, string>();
         private readonly Dictionary<GameObject, string> _enemyObjects = new Dictionary<GameObject, string>();
+        /// <summary>敌人稳定 ID → 角色根物体。Health 组件可能挂在子物体上，位姿/停用都必须作用在根物体上。</summary>
+        private readonly Dictionary<string, GameObject> _enemyRoots = new Dictionary<string, GameObject>();
+        /// <summary>Mod 自己停用过的敌人 ID。只有这些对象 Mod 才有权销毁——游戏自己停用的（按玩家距离卸载等）不能碰。</summary>
+        private readonly HashSet<string> _modDeactivated = new HashSet<string>();
         private readonly Dictionary<Health, AICharacterController> _enemyControllers = new Dictionary<Health, AICharacterController>();
         private readonly Dictionary<DamageReceiver, string> _receiverIds = new Dictionary<DamageReceiver, string>();
         private readonly HashSet<Item> _enemyItems = new HashSet<Item>();
@@ -113,7 +118,11 @@ namespace DeathRewind.Unity
             // 记录敌人的 CharacterItem：敌人死亡时游戏会把装备丢进尸体箱，
             // 复活后就没装备了。这里登记后由 EnemyLootboxPatch 阻止那次丢弃。
             var character = CharacterOf(health);
-            if (character != null && character.CharacterItem != null) _enemyItems.Add(character.CharacterItem);
+            if (character != null)
+            {
+                if (character.CharacterItem != null) _enemyItems.Add(character.CharacterItem);
+                _enemyRoots[id] = character.gameObject;
+            }
         }
 
         /// <summary>取某个 Health 所属的角色。</summary>
@@ -198,6 +207,8 @@ namespace DeathRewind.Unity
             if (health == null) return;
             if (_enemyIds.TryGetValue(health, out var existing))
             {
+                // 死亡持久化补丁已停用角色根物体 → 该尸体由 Mod 接管
+                _modDeactivated.Add(existing);
                 _store.SetEnemy(existing, new EnemyState { Alive = false, Health = 0f });
                 return;
             }
@@ -205,6 +216,10 @@ namespace DeathRewind.Unity
             _enemyIds[health] = id;
             _enemyObjects[health.gameObject] = id;
             _registeredAt[id] = _now;
+            // 死亡持久化补丁会停用角色根物体 → 该尸体由 Mod 接管，可由 Mod 销毁
+            _modDeactivated.Add(id);
+            var root = RootOf(health);
+            if (root != null) _enemyRoots[id] = root;
             _store.SetEnemy(id, new EnemyState
             {
                 Alive = false,
@@ -215,23 +230,17 @@ namespace DeathRewind.Unity
         }
 
         /// <summary>回退中"移除"的敌人：只停用，销毁推迟到提交成功后。</summary>
-        public void MarkDeferredDestroy(string enemyId) => _deferredDestroy.Add(enemyId);
+        public void MarkDeferredDestroy(string enemyId)
+        {
+            _deferredDestroy.Add(enemyId);
+            // 该对象是 Mod 自己停用的 → Mod 接管其生命周期，可在提交成功后销毁
+            _modDeactivated.Add(enemyId);
+        }
 
         // --- 注册表查询（供 WorldRestorer 的差量表按稳定 ID 找回对象） ---
 
         /// <summary>按稳定 ID 找回敌人的 Health；对象已被游戏销毁时返回 null。</summary>
-        public Health GetEnemyHealth(string id)
-        {
-            if (string.IsNullOrEmpty(id)) return null;
-            foreach (var kv in _enemyObjects)
-            {
-                if (kv.Value != id) continue;
-                if (kv.Key == null) return null;
-                var health = kv.Key.GetComponent<Health>();
-                if (health != null) return health;
-            }
-            return null;
-        }
+        public Health GetEnemyHealth(string id) => FindHealthById(id);
 
         /// <summary>按稳定 ID 找回敌人的 GameObject；对象已被游戏销毁时返回 null。</summary>
         public GameObject GetEnemyObject(string id)
@@ -273,20 +282,18 @@ namespace DeathRewind.Unity
         {
             foreach (var id in _deferredDestroy)
             {
-                foreach (var kv in _enemyObjects)
-                {
-                    if (kv.Value != id) continue;
-                    if (kv.Key != null && !kv.Key.activeSelf) Object.Destroy(kv.Key);
-                }
+                DestroyEnemyIfOwned(id);
             }
             _deferredDestroy.Clear();
         }
 
-        /// <summary>关卡结束：销毁全部被跟踪的停用敌人对象。</summary>
+        /// <summary>关卡结束：销毁 Mod 接管的停用尸体（游戏自己停用的对象一律不动）。</summary>
         public void DestroyAllTrackedEnemies()
         {
-            foreach (var kv in _enemyObjects)
-                if (kv.Key != null && !kv.Key.activeSelf) Object.Destroy(kv.Key);
+            foreach (var id in new List<string>(_modDeactivated))
+            {
+                DestroyEnemyIfOwned(id);
+            }
             _deferredDestroy.Clear();
         }
 
@@ -295,13 +302,124 @@ namespace DeathRewind.Unity
         {
             if (anchor == null) return;
             AnchorBuilder.DeleteAnchorFiles(anchor);
-            foreach (var kv in _enemyObjects)
+            if (anchor.Enemies == null) return;
+            foreach (var kv in anchor.Enemies)
             {
-                if (kv.Value == null) continue;
-                if (!anchor.Enemies.ContainsKey(kv.Value)) continue;
-                var go = kv.Key;
-                if (go == null) continue;
-                if (!go.activeSelf) Object.Destroy(go);
+                DestroyEnemyIfOwned(kv.Key);
+            }
+        }
+
+        /// <summary>
+        /// 销毁敌人对象——**仅限"Mod 自己停用 + 当前处于停用状态"的对象**。
+        ///
+        /// 游戏自己也会停用敌人：<c>SetActiveByPlayerDistance</c> 在玩家离开 100m 外时把角色根物体
+        /// SetActive(false)，玩家走回来再激活；死亡时 <c>Health.Hurt</c> 也会停用 Health 所在物体。
+        /// 因此"处于停用状态"≠"已经死了、可以销毁"：误销毁会让 Boss（如零号区·矮鸭）永久消失，
+        /// 而且游戏的刷怪器不会再生成它。游戏自己停用的对象只从注册表里忘掉，绝不销毁。
+        /// </summary>
+        private void DestroyEnemyIfOwned(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return;
+            bool modDeactivated = _modDeactivated.Contains(id);
+            var health = FindHealthById(id);
+            if (health == null) return;                     // 已被游戏销毁
+            var healthGo = health.gameObject;
+            var root = FindRootById(id);
+            var target = root != null ? root : healthGo;
+            bool inactive = target != null && !target.activeSelf;
+            if (!EnemyPolicy.CanDestroy(modDeactivated, inactive))
+            {
+                if (!modDeactivated)
+                    ModLog.Log($"[DeathRewind] 跳过销毁游戏自己停用的敌人（按距离卸载的活怪/Boss）: {id}");
+                return;
+            }
+            if (healthGo != null && !healthGo.activeSelf) Object.Destroy(healthGo);
+            if (root != null && root != healthGo && !root.activeSelf) Object.Destroy(root);
+            ModLog.Log($"[DeathRewind] 清理 Mod 接管的敌人尸体: {id}");
+        }
+
+        /// <summary>按稳定 ID 找回敌人的 Health 组件（对象已被游戏销毁时返回 null）。</summary>
+        private Health FindHealthById(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            foreach (var kv in _enemyIds)
+            {
+                if (kv.Value != id) continue;
+                return kv.Key == null ? null : kv.Key;   // 已销毁的 Health 走 Unity 的 == null 判定
+            }
+            return null;
+        }
+
+        /// <summary>按稳定 ID 找回角色根物体（Health 可能在子物体上，停用/位姿要作用在根物体上）。</summary>
+        private GameObject FindRootById(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            return _enemyRoots.TryGetValue(id, out var go) ? go : null;
+        }
+
+        /// <summary>敌人稳定 ID 注册表（供 WorldRestorer 判断 late-spawned）。</summary>
+        public bool RegisteredAfterAnchor(string id, double anchorTimestamp)
+        {
+            if (string.IsNullOrEmpty(id)) return false;
+            if (!_registeredAt.TryGetValue(id, out var registered)) return false;
+            return registered > anchorTimestamp;
+        }
+
+        /// <summary>按稳定 ID 找回角色根物体（供 WorldRestorer 使用）。</summary>
+        public GameObject GetEnemyRoot(string id) => FindRootById(id);
+
+        /// <summary>该敌人是否是 Boss（唯一实体：游戏的刷怪器不会再次生成它，回退时不可移除）。</summary>
+        public bool IsBossEnemy(string id)
+        {
+            var health = FindHealthById(id);
+            if (health == null) return false;
+            var character = CharacterOf(health);
+            return character != null && character.isBossCharacter;
+        }
+
+        /// <summary>角色根物体（Health 组件可能挂在子物体上）。</summary>
+        private static GameObject RootOf(Health health)
+        {
+            var character = CharacterOf(health);
+            return character != null ? character.gameObject : null;
+        }
+
+        /// <summary>
+        /// 把敌人从游戏的"按玩家距离启停"名单里摘掉。
+        /// 否则玩家靠近时游戏会把它重新激活 → Mod 的"停用/移除"失效（敌人会自己回来）。
+        /// </summary>
+        public static void UnregisterFromDistanceStreaming(GameObject root)
+        {
+            if (root == null) return;
+            try
+            {
+                var character = root.GetComponent<CharacterMainControl>();
+                if (character == null) return;
+                int related = Compat.PrivateStateAccessor.GetInt(character, "relatedScene", -1);
+                if (related < 0) return;
+                SetActiveByPlayerDistance.Unregister(root, related);
+            }
+            catch (System.Exception e)
+            {
+                ModLog.LogWarning($"[DeathRewind] 摘除敌人距离启停登记失败: {e.Message}");
+            }
+        }
+
+        /// <summary>复活后重新登记到"按玩家距离启停"名单（原生死亡流程会摘除登记）。</summary>
+        public static void RegisterToDistanceStreaming(GameObject root)
+        {
+            if (root == null) return;
+            try
+            {
+                var character = root.GetComponent<CharacterMainControl>();
+                if (character == null) return;
+                int related = Compat.PrivateStateAccessor.GetInt(character, "relatedScene", -1);
+                if (related < 0) return;
+                SetActiveByPlayerDistance.Register(root, related);
+            }
+            catch (System.Exception e)
+            {
+                ModLog.LogWarning($"[DeathRewind] 恢复敌人距离启停登记失败: {e.Message}");
             }
         }
 
@@ -315,7 +433,11 @@ namespace DeathRewind.Unity
                     _anchorCovered.Add(id);
         }
 
-        /// <summary>未被任何锚点覆盖、且登记超过 anchorCount×anchorInterval 的停用敌人 → 淘汰销毁。</summary>
+        /// <summary>
+        /// 登记超过 anchorCount×anchorInterval 且未被锚点覆盖的敌人 → 从注册表淘汰。
+        /// 只有 Mod 自己停用的尸体会被销毁；游戏自己停用的（玩家离开 100m 外被
+        /// <c>SetActiveByPlayerDistance</c> 关掉）**只遗忘、不销毁**——销毁会让 Boss 永久消失。
+        /// </summary>
         private void EvictStale()
         {
             double limit = _anchorCount * _anchorInterval;
@@ -328,12 +450,14 @@ namespace DeathRewind.Unity
             foreach (var id in stale)
             {
                 _registeredAt.Remove(id);
+                DestroyEnemyIfOwned(id);
                 foreach (var kv in new List<KeyValuePair<GameObject, string>>(_enemyObjects))
                 {
                     if (kv.Value != id) continue;
-                    if (kv.Key != null && !kv.Key.activeSelf) Object.Destroy(kv.Key);
                     _enemyObjects.Remove(kv.Key);
                 }
+                _enemyRoots.Remove(id);
+                _modDeactivated.Remove(id);
             }
         }
 
@@ -341,6 +465,8 @@ namespace DeathRewind.Unity
         {
             _enemyIds.Clear();
             _enemyObjects.Clear();
+            _enemyRoots.Clear();
+            _modDeactivated.Clear();
             _doorIds.Clear();
             _registeredAt.Clear();
             _anchorCovered.Clear();
@@ -359,6 +485,8 @@ namespace DeathRewind.Unity
         private void RemoveEntry(string id, Health key)
         {
             _registeredAt.Remove(id);
+            _enemyRoots.Remove(id);
+            _modDeactivated.Remove(id);
             if (key != null) _enemyIds.Remove(key);
             foreach (var kv in new List<KeyValuePair<GameObject, string>>(_enemyObjects))
                 if (kv.Value == id) _enemyObjects.Remove(kv.Key);
