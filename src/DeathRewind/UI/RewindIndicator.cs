@@ -38,6 +38,7 @@ namespace DeathRewind.UI
         /// <summary>
         /// 设置指示图标状态。available=true 显示硬币，false 隐藏。
         /// 每帧调用开销很小：状态没变时直接返回。
+        /// 若底层 GameObject 因场景切换等原因被销毁，会在下次 EnsureCreated 时重建（隐藏态下重建后立即 SetActive(false)）。
         /// </summary>
         public static void SetAvailable(bool available)
         {
@@ -51,9 +52,15 @@ namespace DeathRewind.UI
                 }
                 _row.SetActive(true);
             }
-            else if (_row != null)
+            else
             {
-                _row.SetActive(false);
+                // 隐藏态：若 row 已销毁（场景切换）就 leave 它销毁，EnsureCreated 下一次 visible=true 时会重建。
+                // 但必须把 _visible 设为 false，避免下次 Update 仍返回 true 时 early-return。
+                if (_row != null) _row.SetActive(false);
+            }
+            if (_visible != available)
+            {
+                ModLog.Log($"[DR-Trace] RewindIndicator SetAvailable({available}) — 可见性 {_visible}→{available}");
             }
             _visible = available;
         }
@@ -127,6 +134,7 @@ namespace DeathRewind.UI
             tmp.color = Color.white;
             tmp.fontSize = 24f;
             tmp.fontStyle = FontStyles.Bold;
+            tmp.richText = false;                    // 禁富文本，防父级/字体资产注入 <s>/<strikethrough>
             tmp.alignment = TextAlignmentOptions.Left;
             tmp.raycastTarget = false;
             var labelRect = (RectTransform)labelObj.transform;
@@ -183,11 +191,14 @@ namespace DeathRewind.UI
         /// <summary>程序生成的金币贴图（不依赖游戏素材，避免图标资源缺失）。</summary>
         private static Texture2D BuildCoinTexture(int size)
         {
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear
+            };
             var pixels = new Color32[size * size];
             float r = size * 0.5f;
             float outer = r - 1f;
-            float inner = r * 0.72f;   // 内圈（币面）
             float rim = r * 0.86f;     // 外圈边缘
             for (int y = 0; y < size; y++)
             {

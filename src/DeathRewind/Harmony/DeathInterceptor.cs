@@ -38,6 +38,9 @@ namespace DeathRewind.Harmony
         private static DamageInfo _capturedDamage;
         private static DeathSnapshot _deathSnapshot;
         private static Anchor _pendingAnchor;
+
+        /// <summary>结算界面时间轴的候选节点上限（1~4 个，覆盖约 60s 窗口）。</summary>
+        private const int MaxTimelineNodes = 4;
         private static HarmonyLibHarmony _harmony;
 
         /// <summary>IMGUI 降级面板是否打开（供 ModBehaviour.OnGUI 转发判断）。</summary>
@@ -48,7 +51,7 @@ namespace DeathRewind.Harmony
             _owner = owner; _config = config; _restorer = restorer;
             if (!HarmonyGuard.CanRegister("com.deathrewind.interceptor"))
             {
-                Debug.LogWarning("[DeathRewind] 因 Harmony 冲突，拦截功能未启用");
+                ModLog.LogWarning("[DeathRewind] 因 Harmony 冲突，拦截功能未启用");
                 return;
             }
 
@@ -77,10 +80,10 @@ namespace DeathRewind.Harmony
             }
             else
             {
-                Debug.LogWarning("[DeathRewind] 未找到 ClosureView.ShowAndReturnTask(DamageInfo, float)，接受死亡时结算界面会出现两次");
+                ModLog.LogWarning("[DeathRewind] 未找到 ClosureView.ShowAndReturnTask(DamageInfo, float)，接受死亡时结算界面会出现两次");
             }
 
-            Debug.Log("[DeathRewind] DeathInterceptor installed (OnMainCharacterDie prefix + ClosureView suppress)");
+            ModLog.Log("[DeathRewind] DeathInterceptor installed (OnMainCharacterDie prefix + ClosureView suppress)");
         }
 
         public static void Uninstall()
@@ -106,37 +109,53 @@ namespace DeathRewind.Harmony
             if (!_suppressNextClosure) return true;
             _suppressNextClosure = false;
             __result = UniTask.CompletedTask;
-            Debug.Log("[DeathRewind] 已跳过重放流程中的第二次死亡结算界面");
+            ModLog.Log("[DeathRewind] 已跳过重放流程中的第二次死亡结算界面");
             return false;
         }
 
         /// <summary>
-        /// 回溯目标选择：优先当前场景内年龄达标的最年轻锚点（子场景锚点互不可见）；
-        /// 当前场景内没有则回退到"进入该场景那一刻"的起点锚点（进图不足窗口长度 / 刚进楼层地道就死）。
+        /// 结算界面的回溯候选节点（最多 <see cref="MaxTimelineNodes"/> 个，旧→新）：
+        /// 优先取当前场景内年龄达标的锚点（默认配置下正好覆盖 ~60s 窗口的 4 个节点）；
+        /// 没有时回退到"进入该场景那一刻"的起点锚点（进图不足窗口长度 / 刚进楼层地道就死）。
         /// </summary>
-        private static Anchor SelectTargetWithLevelStartFallback(AnchorRing ring)
+        private static List<RewindCandidate> BuildCandidates(AnchorRing ring)
         {
+            var list = new List<RewindCandidate>();
             var owner = _owner;
-            if (owner == null) return null;
+            if (owner == null) return list;
             string sceneKey = LevelAccess.CurrentSceneKey;
-            var anchor = ring.SelectTarget(sceneKey);
-            if (anchor != null) return anchor;
+
+            var targets = ring.SelectTargets(sceneKey, MaxTimelineNodes);
+            if (targets.Count > 0)
+            {
+                foreach (var a in targets)
+                {
+                    list.Add(new RewindCandidate(a, owner.CurrentTick - a.AbsTimestamp));
+                }
+                ModLog.Log($"[DeathRewind] 场景 {sceneKey} 回溯候选 {list.Count} 个：" +
+                           string.Join(", ", list.ConvertAll(c => $"{c.AgeSeconds:0}s")) + "，默认取最近");
+                return list;
+            }
 
             var start = owner.GetLevelStartAnchor(sceneKey);
             // 刚进该场景就死（起点锚点年龄 <2s）→ 回溯等于原地复活，无意义，按无锚点处理
             if (start == null || owner.CurrentTick - start.AbsTimestamp < 2)
             {
-                Debug.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点且起点锚点不可用");
-                return null;
+                ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点且起点锚点不可用");
+                return list;
             }
-            Debug.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点，回溯目标取起点锚点 id={start.Id}");
-            return start;
+            list.Add(new RewindCandidate(start, owner.CurrentTick - start.AbsTimestamp));
+            ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点，回溯目标取起点锚点 id={start.Id}");
+            return list;
         }
 
         /// <summary>死亡入口前缀：捕获伤害、判定是否可回溯、冻结时间并驱动结算界面裁决。</summary>
         private static bool OnDeathPrefix(DamageInfo __0)
         {
             if (_config == null || !_config.Enabled) return true;
+
+            // 基地（Base）是安全屋，没有回溯场景——不拦截死亡
+            if (LevelAccess.InBaseLevel) return true;
 
             if (_bypassNext)
             {
@@ -154,37 +173,39 @@ namespace DeathRewind.Harmony
             if (ring == null) return true;
             if (ring.RewindCount >= _config.MaxRewinds)
             {
-                Debug.Log("[DeathRewind] rewind limit reached");
+                ModLog.Log("[DeathRewind] rewind limit reached");
                 return true;
             }
 
-            // 目标选择含起点锚点回退（进图不足 minRewindAge 时回到进图那一刻）。
+            // 候选节点（含起点锚点回退：进图不足 minRewindAge 时回到进图那一刻）。
             // 不能用 ring.CanRewind() 做门槛：它只认年龄达标的锚点，进图 60s 内会误判"无合格锚点"。
-            var anchor = SelectTargetWithLevelStartFallback(ring);
-            if (anchor == null)
+            var candidates = BuildCandidates(ring);
+            if (candidates.Count == 0)
             {
-                Debug.Log("[DeathRewind] no eligible anchor");
+                ModLog.Log("[DeathRewind] no eligible anchor");
                 return true;
             }
+            var anchor = candidates[candidates.Count - 1].Anchor;   // 默认选最近的一个节点
 
             _interceptionActive = true;
             _capturedDamage = __0;
             _deathSnapshot = CaptureDeathSnapshot();
             _restorer?.SetDeathContext(_deathSnapshot, _capturedDamage);
             _owner.FreezeTimeScale();
+            _owner.SuppressLevelEnd = true;   // 裁决期间禁止楼层 unload / RaidEnd 清空锚点环
             _pendingAnchor = anchor;
 
             // 跨地图保护
             if (!string.IsNullOrEmpty(anchor.SceneKey) && anchor.SceneKey != LevelAccess.CurrentSceneKey)
             {
-                Debug.Log($"[DeathRewind] anchor scene mismatch: {anchor.SceneKey} != {LevelAccess.CurrentSceneKey}");
+                ModLog.Log($"[DeathRewind] anchor scene mismatch: {anchor.SceneKey} != {LevelAccess.CurrentSceneKey}");
                 _pendingAnchor = null;
                 CancelPending();
                 return true;
             }
 
             var ageSeconds = _owner.CurrentTick - anchor.AbsTimestamp;
-            Debug.Log($"[DeathRewind] death intercepted, anchor id={anchor.Id} age={ageSeconds:0}s");
+            ModLog.Log($"[DeathRewind] death intercepted, anchor id={anchor.Id} age={ageSeconds:0}s");
 
             if (_config.AutoRewind)
             {
@@ -194,14 +215,15 @@ namespace DeathRewind.Harmony
             else
             {
                 _rewindClicked = false;
-                _owner.StartCoroutine(DeathChoiceRoutine(__0, anchor, ageSeconds));
+                _owner.StartCoroutine(DeathChoiceRoutine(__0, anchor, ageSeconds, candidates));
             }
 
             return false; // 吞掉原 OnMainCharacterDie：原生死亡后果（掉落/墓碑/存档/结算）在玩家裁决前不发生
         }
 
         /// <summary>驱动原生 YOU DIED 结算界面并注入回溯按钮，等待玩家裁决。</summary>
-        private static IEnumerator DeathChoiceRoutine(DamageInfo damage, Anchor anchor, double ageSeconds)
+        private static IEnumerator DeathChoiceRoutine(DamageInfo damage, Anchor anchor, double ageSeconds,
+                                                   List<RewindCandidate> candidates)
         {
             int gen = _choiceGeneration;
 
@@ -217,12 +239,12 @@ namespace DeathRewind.Harmony
 
             if (view == null || continueBtn == null)
             {
-                Debug.LogWarning("[DeathRewind] 原生死亡结算界面不可用，降级为内置裁决面板");
+                ModLog.LogWarning("[DeathRewind] 原生死亡结算界面不可用，降级为内置裁决面板");
                 yield return FallbackPromptRoutine(gen, anchor, ageSeconds);
                 yield break;
             }
 
-            Debug.Log("[DeathRewind] driving native ClosureView with injected rewind button");
+            ModLog.Log("[DeathRewind] driving native ClosureView with injected rewind button");
 
             // OnMainCharacterDie 已被吞掉，由我们主动打开原生结算界面
             var showTask = ClosureView.ShowAndReturnTask(damage, 0.5f);
@@ -236,23 +258,34 @@ namespace DeathRewind.Harmony
             }
             if (_choiceGeneration != gen) yield break;
             if (!continueBtn.gameObject.activeInHierarchy)
-                Debug.LogWarning($"[DeathRewind] continueBtn 等待超时（{wait:0.0}s）仍未亮出，尝试强制激活");
+                ModLog.LogWarning($"[DeathRewind] continueBtn 等待超时（{wait:0.0}s）仍未亮出，尝试强制激活");
             if (!continueBtn.gameObject.activeSelf) continueBtn.gameObject.SetActive(true);
 
             // 注入控件组：原生"继续"按钮 + 回溯按钮并排一行，白色提示文字与箭头在回溯按钮上方，
             // 锚点缩略图在按钮行下方（行合并后腾出的竖向空间全部给图片）。
-            var panel = ClosurePanel.Create(view.transform, continueBtn, $"回溯 {ageSeconds:0} 秒", anchor.PreviewPng);
-            Debug.Log($"[DeathRewind] 回溯控件注入: {(panel != null ? "ok" : "failed")} " +
-                      $"(view={view != null} contBtn={continueBtn != null} wait={wait:0.0}s preview={(panel != null && panel.HasPreview ? "ok" : "none")})");
+            // 时间轴：1~4 个候选节点，默认选最近的一个；
+            // 拖拽切换节点 → 换预览图 + 换回溯目标（selected 随选择变化）
+            var selected = anchor;
+            var panel = ClosurePanel.Create(view.transform, continueBtn, $"回溯 {ageSeconds:0} 秒", candidates);
+            ModLog.Log($"[DeathRewind] 回溯控件注入: {(panel != null ? "ok" : "failed")} " +
+                      $"(view={view != null} contBtn={continueBtn != null} wait={wait:0.0}s preview={(panel != null && panel.HasPreview ? "ok" : "none")} nodes={(panel != null ? panel.CandidateCount : 0)})");
             if (panel == null)
             {
-                Debug.LogWarning("[DeathRewind] 回溯控件注入失败，只能选择继续（接受死亡）");
+                ModLog.LogWarning("[DeathRewind] 回溯控件注入失败，只能选择继续（接受死亡）");
             }
             else
             {
                 panel.RewindButton.onClick.AddListener(() => { _rewindClicked = true; });
+                panel.NodeSelected += index =>
+                {
+                    if (index < 0 || index >= candidates.Count) return;
+                    selected = candidates[index].Anchor;
+                    _pendingAnchor = selected;
+                    panel.SetRewindLabel($"回溯 {candidates[index].AgeSeconds:0} 秒");
+                    ModLog.Log($"[DeathRewind] 时间轴选中节点 #{index} age={candidates[index].AgeSeconds:0}s anchorId={selected.Id}");
+                };
                 if (!panel.HasPreview)
-                    Debug.LogWarning("[DeathRewind] 锚点缩略图不可用（未抓到画面）");
+                    ModLog.LogWarning("[DeathRewind] 锚点缩略图不可用（未抓到画面）");
             }
 
             // 等待玩家裁决：点回溯按钮，或点原生"继续"（showTask 完成）
@@ -278,7 +311,7 @@ namespace DeathRewind.Harmony
             // 直接关界面并恢复世界。
             try { view.Close(); } catch { /* 忽略 */ }
 
-            yield return RestoreRoutine(anchor);
+            yield return RestoreRoutine(selected);
         }
 
         /// <summary>原生结算界面不可用时的 IMGI 降级面板。</summary>
@@ -305,10 +338,11 @@ namespace DeathRewind.Harmony
 
         private static void AcceptDeath()
         {
-            Debug.Log("[DeathRewind] player chose to accept death");
+            ModLog.Log("[DeathRewind] player chose to accept death");
             _interceptionActive = false;
             _pendingAnchor = null;
             _owner.ReleaseTimeScale();
+            _owner.SuppressLevelEnd = false;
             if (_closurePatchInstalled) _suppressNextClosure = true; // 重放时跳过第二次结算界面
             ScheduleReplay();
         }
@@ -348,19 +382,20 @@ namespace DeathRewind.Harmony
                 _owner.Ring.ResetGridTo(anchor.GridTimestamp, _owner.CurrentTick);
                 foreach (var old in removed) _owner.ReleaseAnchor(old);
                 _owner.ReleaseCommittedDestroy();
-                Debug.Log($"[DeathRewind] rewind result=ok rewindCount={_owner.Ring.RewindCount} consumedAnchor={anchor.Id}");
+                ModLog.Log($"[DeathRewind] rewind result=ok rewindCount={_owner.Ring.RewindCount} consumedAnchor={anchor.Id}");
                 PostReviveFixup();
                 _owner.StartCoroutine(PostReviveGuard());
             }
             else
             {
-                Debug.LogWarning($"[DeathRewind] rewind result=failed rewindCount={_owner.Ring.RewindCount}");
+                ModLog.LogWarning($"[DeathRewind] rewind result=failed rewindCount={_owner.Ring.RewindCount}");
                 ScheduleReplay();
             }
 
             _interceptionActive = false;
             _pendingAnchor = null;
             _owner.ReleaseTimeScale();
+            _owner.SuppressLevelEnd = false;   // 恢复世界清理权限
         }
 
         /// <summary>
@@ -385,29 +420,29 @@ namespace DeathRewind.Harmony
                     if (receiver != null && !receiver.gameObject.activeSelf)
                     {
                         receiver.gameObject.SetActive(true);
-                        Debug.LogWarning("[DeathRewind] 复活守卫: mainDamageReceiver 被停用，已重新激活");
+                        ModLog.LogWarning("[DeathRewind] 复活守卫: mainDamageReceiver 被停用，已重新激活");
                     }
                     if (health.Invincible)
                     {
+                        ModLog.LogWarning("[DeathRewind] 复活守卫: invincible=true 来源未知 → 强制复位，若属游戏正当保护（StormShield/撤离/特殊阶段）请反馈");
                         health.SetInvincible(false);
-                        Debug.LogWarning("[DeathRewind] 复活守卫: invincible 被再次置真，已复位（来源见 SetInvincible 调用栈日志）");
                     }
                     if (health.IsDead)
                     {
                         Compat.PrivateStateAccessor.SetBool(health, "isDead", false);
-                        Debug.LogWarning("[DeathRewind] 复活守卫: isDead 残留（血量>0），已复位");
+                        ModLog.LogWarning("[DeathRewind] 复活守卫: isDead 残留（血量>0），已复位");
                     }
                     var core = MultiSceneCore.Instance;
                     if (core != null && core.IsLoading)
                     {
                         typeof(MultiSceneCore).GetField("isLoading", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
                             ?.SetValue(core, false);
-                        Debug.LogWarning("[DeathRewind] 复活守卫: IsLoading 卡在 true，已复位");
+                        ModLog.LogWarning("[DeathRewind] 复活守卫: IsLoading 卡在 true，已复位");
                     }
                 }
                 catch (Exception e)
                 {
-                    Debug.LogWarning($"[DeathRewind] 复活守卫异常: {e.Message}");
+                    ModLog.LogWarning($"[DeathRewind] 复活守卫异常: {e.Message}");
                 }
             }
         }
@@ -442,17 +477,17 @@ namespace DeathRewind.Harmony
                     if (f != null)
                     {
                         f.SetValue(core, false);
-                        Debug.LogWarning("[DeathRewind] MultiSceneCore.IsLoading 卡在 true，已强制复位（全场无敌的根因）");
+                        ModLog.LogWarning("[DeathRewind] MultiSceneCore.IsLoading 卡在 true，已强制复位（全场无敌的根因）");
                     }
                     else
                     {
-                        Debug.LogWarning("[DeathRewind] IsLoading=true 但未找到 isLoading 字段，无法复位（需核对字段名）");
+                        ModLog.LogWarning("[DeathRewind] IsLoading=true 但未找到 isLoading 字段，无法复位（需核对字段名）");
                     }
                 }
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] IsLoading 检查失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] IsLoading 检查失败: {e.Message}");
             }
 
             // 0.5) View.ActiveView 残留检查：结算界面关闭后若残留，
@@ -462,7 +497,7 @@ namespace DeathRewind.Harmony
                 var av = View.ActiveView;
                 if (av != null)
                 {
-                    Debug.LogWarning($"[DeathRewind] View.ActiveView 残留: {av.GetType().Name}，强制关闭");
+                    ModLog.LogWarning($"[DeathRewind] View.ActiveView 残留: {av.GetType().Name}，强制关闭");
                     try { av.Close(); } catch { /* 忽略 */ }
                     // setter 是 private static：Close 未清引用时反射置空
                     typeof(View).GetProperty("ActiveView", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
@@ -471,7 +506,7 @@ namespace DeathRewind.Harmony
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] ActiveView 检查失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] ActiveView 检查失败: {e.Message}");
             }
 
             // 1) 输入封锁复位
@@ -487,7 +522,7 @@ namespace DeathRewind.Harmony
                     {
                         int n = blocked.Count;
                         blocked.Clear();
-                        Debug.Log($"[DeathRewind] 已清空 InputManager 输入封锁源 x{n}");
+                        ModLog.Log($"[DeathRewind] 已清空 InputManager 输入封锁源 x{n}");
                     }
                     imType.GetField("inputActiveCoolCounter", flags)?.SetValue(inst, 0);
                     // UpdateCursor 首分支（controllingCharacter 为 null/失活）会直接隐藏自绘准星；
@@ -499,17 +534,17 @@ namespace DeathRewind.Harmony
                         if (mainForInput != null)
                         {
                             ccField.SetValue(inst, mainForInput);
-                            Debug.Log("[DeathRewind] 已恢复 InputManager.controllingCharacter");
+                            ModLog.Log("[DeathRewind] 已恢复 InputManager.controllingCharacter");
                         }
                     }
                     imType.GetMethod("UpdateCursor", flags)?.Invoke(inst, null);
                     var cc = imType.GetField("controllingCharacter", flags)?.GetValue(inst);
-                    Debug.Log($"[DeathRewind] 输入复位完成: controllingCharacter={(cc == null ? "null" : "ok")}");
+                    ModLog.Log($"[DeathRewind] 输入复位完成: controllingCharacter={(cc == null ? "null" : "ok")}");
                 }
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 输入复位失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 输入复位失败: {e.Message}");
             }
 
             // 2) 玩家状态终检（诊断 + 保险）
@@ -539,15 +574,15 @@ namespace DeathRewind.Harmony
                     if (receiver != null && !receiver.gameObject.activeSelf)
                     {
                         receiver.gameObject.SetActive(true);
-                        Debug.LogWarning("[DeathRewind] 复活终检: mainDamageReceiver 处于停用（无敌+不索敌根因），已重新激活");
+                        ModLog.LogWarning("[DeathRewind] 复活终检: mainDamageReceiver 处于停用（无敌+不索敌根因），已重新激活");
                     }
                     if (wasInvincible || wasDead || wasHandled)
-                        Debug.Log($"[DeathRewind] 复活终检复位: invincible={wasInvincible} isDead={wasDead} hasHandledDeath={wasHandled}");
+                        ModLog.Log($"[DeathRewind] 复活终检复位: invincible={wasInvincible} isDead={wasDead} hasHandledDeath={wasHandled}");
                 }
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 玩家状态终检失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 玩家状态终检失败: {e.Message}");
             }
 
             // 3) 血量 UI 重同步：E2 的 SetHealth 发生在 isDead 复位之前，事件驱动的头顶血条
@@ -564,12 +599,49 @@ namespace DeathRewind.Harmony
                         if (typeof(Health).GetField(name, flags)?.GetValue(health) is UnityEvent<Health> ev)
                             ev.Invoke(health);
                     }
-                    Debug.Log($"[DeathRewind] 血量 UI 事件补发: hp={health.CurrentHealth:0.#}/{health.MaxHealth:0.#}");
+                    ModLog.Log($"[DeathRewind] 血量 UI 事件补发: hp={health.CurrentHealth:0.#}/{health.MaxHealth:0.#}");
                 }
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 血量 UI 事件补发失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 血量 UI 事件补发失败: {e.Message}");
+            }
+
+            // 4) 头顶血条重建：HealthBar.DeathTask（协程）在玩家死亡时会把 HealthBar 隐藏/移入对象池。
+            //    我们补发 OnHealthChange 只能刷新已有条目的填充率，若条目本身已被销毁/隐藏则无效。
+            //    这里直接通过 HealthBarManager 强制重建 MainCharacter 的头顶血条。
+            try
+            {
+                var hbmType = AccessTools.TypeByName("Duckov.UI.HealthBarManager");
+                if (hbmType != null)
+                {
+                    var manager = UnityEngine.Object.FindObjectOfType(hbmType);
+                    if (manager != null)
+                    {
+                        var main = LevelManager.Instance?.MainCharacter;
+                        if (main != null)
+                        {
+                            var createFor = AccessTools.Method(hbmType, "CreateHealthBarFor");
+                            if (createFor != null)
+                            {
+                                createFor.Invoke(manager, new object[] { main });
+                                ModLog.Log("[DeathRewind] 头顶血条重建: CreateHealthBarFor(MainCharacter) 已调用");
+                            }
+                            else
+                            {
+                                ModLog.LogWarning("[DeathRewind] 头顶血条重建: 未找到 CreateHealthBarFor 方法");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        ModLog.LogWarning("[DeathRewind] 头顶血条重建: HealthBarManager 未找到（可能还未激活）");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ModLog.LogWarning($"[DeathRewind] 头顶血条重建失败: {e.Message}");
             }
         }
 
@@ -586,6 +658,7 @@ namespace DeathRewind.Harmony
             RewindPrompt.Close();
             _choiceGeneration++;   // 使仍在等待的裁决协程失效
             _owner?.ReleaseTimeScale();
+            _owner.SuppressLevelEnd = false;
             _interceptionActive = false;
             _pendingAnchor = null;
         }

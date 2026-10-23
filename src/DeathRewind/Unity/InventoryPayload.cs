@@ -141,7 +141,7 @@ namespace DeathRewind.Unity
                 }
                 catch (System.Exception e)
                 {
-                    Debug.LogWarning($"[DeathRewind] 槽位 {sp.Name} 还原失败: {e.Message}");
+                    ModLog.LogWarning($"[DeathRewind] 槽位 {sp.Name} 还原失败: {e.Message}");
                     allOk = false;
                 }
             }

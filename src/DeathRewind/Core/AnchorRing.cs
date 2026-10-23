@@ -103,6 +103,30 @@ namespace DeathRewind.Core
 
         public Anchor SelectTarget() => SelectTarget(null);
 
+        /// <summary>
+        /// 当前场景内年龄达标的锚点（可回溯候选），按时间从旧到新排序。
+        /// maxCount &gt; 0 时只保留最新的 maxCount 个（结算界面时间轴最多 4 个节点）。
+        /// 与 <see cref="SelectTarget(string)"/> 同口径：年龄达标、未被消耗、场景匹配。
+        /// </summary>
+        public List<Anchor> SelectTargets(string sceneKey, int maxCount)
+        {
+            var list = new List<Anchor>();
+            for (int i = 0; i < _anchors.Count; i++)
+            {
+                var a = _anchors[i];
+                if (a.Consumed) continue;
+                if (CurrentTick - a.AbsTimestamp < _minAge) continue;
+                if (sceneKey != null && !string.Equals(a.SceneKey, sceneKey, StringComparison.Ordinal)) continue;
+                list.Add(a);
+            }
+            list.Sort((x, y) => x.AbsTimestamp.CompareTo(y.AbsTimestamp));   // 旧 → 新
+            if (maxCount > 0 && list.Count > maxCount)
+            {
+                list.RemoveRange(0, list.Count - maxCount);
+            }
+            return list;
+        }
+
         public bool CanRewind() => RewindCount < _maxRewinds && SelectTarget() != null;
 
         /// <summary>
@@ -122,6 +146,26 @@ namespace DeathRewind.Core
                     _anchors.RemoveAt(i);
                 }
             }
+        }
+
+        /// <summary>
+        /// 移除某个场景的全部锚点：子场景重新加载时调用。
+        /// 同名场景是**全新实例**（世界原点可能随传送点变化），上一轮访问留下的锚点不再有效；
+        /// 留着会被当成"当前场景的合格锚点"选中，把玩家回溯到上一次访问的位置。
+        /// 被移除的锚点放入 removed 返回，返回移除数量。
+        /// </summary>
+        public int RemoveByScene(string sceneKey, List<Anchor> removed)
+        {
+            if (string.IsNullOrEmpty(sceneKey)) return 0;
+            int count = 0;
+            for (int i = _anchors.Count - 1; i >= 0; i--)
+            {
+                if (!string.Equals(_anchors[i].SceneKey, sceneKey, StringComparison.Ordinal)) continue;
+                removed.Add(_anchors[i]);
+                _anchors.RemoveAt(i);
+                count++;
+            }
+            return count;
         }
 
         public void Clear()

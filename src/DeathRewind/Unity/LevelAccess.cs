@@ -111,5 +111,22 @@ namespace DeathRewind.Unity
                 catch { return "none"; }
             }
         }
+
+        /// <summary>
+        /// 是否在基地（Base）里：基地是独立关卡（LevelManager.IsBaseLevel），
+        /// 没有回溯场景，HUD「1up」指示不应显示。
+        /// </summary>
+        public static bool InBaseLevel
+        {
+            get
+            {
+                try
+                {
+                    var lm = LevelManager.Instance;
+                    return lm != null && lm.IsBaseLevel;
+                }
+                catch { return false; }
+            }
+        }
     }
 }

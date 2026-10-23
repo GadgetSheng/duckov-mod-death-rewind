@@ -35,9 +35,10 @@ namespace DeathRewind
         private double _startAnchorNotBeforeTick;
         private string _lastSceneKey;
 
-        /// <summary>当前地图的实际游玩场景（level started 时激活的子场景，如 Level_Farm_01）。
-        /// 每张地图结构是"壳场景 + 游玩子场景"（Level_Farm_Main → Level_Farm_01）；
-        /// 之后的子场景切换才是地道/楼层，不建锚点不回溯。</summary>
+        /// <summary>当前关卡的"主要"游玩场景（首次稳定后的 active scene）。
+        /// 仅作日志标识；建锚点 gate 不再依赖单一 mapSceneKey，而是允许任何**稳定停留**的场景
+        /// （包括实验室 JLab 的楼层 1/2、HiddenWarehouse 的主层等 addtive 游玩层）。
+        /// 地道/室内短暂切换靠 MultiSceneLoading + StartAnchorSettleSeconds 自然过滤。</summary>
         private string _mapSceneKey;
         private bool _timeScaleOwned;
 
@@ -45,16 +46,24 @@ namespace DeathRewind
         public AnchorRing Ring => _ring;
         public double CurrentTick => _clock?.CurrentTick ?? 0;
 
+        /// <summary>死亡裁决期间置 true：禁止 OnLevelEnded 清空锚点环（楼层切换时 RaidEnd/场景 unload 可能误触发）。</summary>
+        public bool SuppressLevelEnd
+        {
+            get => _hooks?.SuppressLevelEnd ?? false;
+            set { if (_hooks != null) _hooks.SuppressLevelEnd = value; }
+        }
+
         /// <summary>指定场景的"起点锚点"（进入该场景那一刻的状态）。每个子场景（楼层/地道）独立一个。</summary>
         public Anchor GetLevelStartAnchor(string sceneKey)
             => sceneKey != null && _levelStartAnchors.TryGetValue(sceneKey, out var a) ? a : null;
 
         protected override void OnAfterSetup()
         {
+            ModLog.Log("[DR-Trace] ====== Log channel test: if you see this, Log works ======");
             _config = ModConfig.Load();
-            Debug.Log($"[DeathRewind] mods root: {Duckov.Modding.ModManager.DefaultModFolderPath}");
+            ModLog.Log($"[DeathRewind] mods root: {Duckov.Modding.ModManager.DefaultModFolderPath}");
             RegisterModConfigOptions();
-            if (!_config.Enabled) { Debug.Log("[DeathRewind] disabled by config"); return; }
+            if (!_config.Enabled) { ModLog.Log("[DeathRewind] disabled by config"); return; }
 
             _clock = new RewindClock();
             _ring = new AnchorRing(_config.AnchorCount, _config.MinRewindAge, _config.MaxRewinds, _config.AnchorInterval);
@@ -84,8 +93,8 @@ namespace DeathRewind
             }
             try
             {
-                // 伤害门控诊断：抓"复活后无敌"的外部来源（限频日志，正常游玩零感知）
-                HurtGatePatch.Install();
+                // 伤害门控诊断补丁：仅调试构建启用，用于抓“复活后无敌”的外部来源
+                if (ModLog.USE_DEBUG) HurtGatePatch.Install();
             }
             catch (Exception e)
             {
@@ -106,7 +115,7 @@ namespace DeathRewind
                 Debug.LogError($"[DeathRewind] EnemyPersistencePatch install failed: {e}");
             }
             // 缩略图改为锚点构建同帧抓取（见 CaptureAnchorThumbnail），不再需要端帧循环
-            Debug.Log("[DeathRewind] initialized");
+            ModLog.Log("[DeathRewind] initialized");
         }
 
         /// <summary>
@@ -134,7 +143,7 @@ namespace DeathRewind
             if (key == null || !key.StartsWith(ModConfigBridge.Prefixed(""))) return;
             _config.ReloadFromModConfig();
             _ring?.Reconfigure(_config.AnchorCount, _config.MinRewindAge, _config.MaxRewinds, _config.AnchorInterval);
-            Debug.Log($"[DeathRewind] 游戏内设置变更生效: {key} " +
+            ModLog.Log($"[DeathRewind] 游戏内设置变更生效: {key} " +
                       $"(interval={_config.AnchorInterval:0.#}s count={_config.AnchorCount} minAge={_config.MinRewindAge:0.#}s scope={_config.RewindScope})");
         }
 
@@ -145,7 +154,7 @@ namespace DeathRewind
             EnemyPersistencePatch.Uninstall();
             RewindIndicator.Dispose();
             _hooks?.Uninstall();
-            Debug.Log("[DeathRewind] deactivated");
+            ModLog.Log("[DeathRewind] deactivated");
         }
 
         /// <summary>
@@ -177,21 +186,22 @@ namespace DeathRewind
 
                 var due = _ring.PollDueGridTimestamp();
                 bool settled = _clock.CurrentTick >= _startAnchorNotBeforeTick;
-                // 只在地图游玩场景内建锚点；地道/楼层等后续子场景不做回溯（用户决定放弃）
-                bool inMap = sceneKey == _mapSceneKey;
-                if (due.HasValue && LevelAccess.LevelReady && settled && inMap)
+                // 基地（Base）是安全屋，没有回溯场景——不采锚点，省内存/IO
+                bool inBase = LevelAccess.InBaseLevel;
+                // 允许任何稳定停留的场景建锚点（楼层、主层等 additive 游玩层）；
+                // 地道/室内短暂切换靠 MultiSceneLoading 推未来时间 + StartAnchorSettleSeconds 自然过滤
+                if (!inBase && due.HasValue && LevelAccess.LevelReady && settled)
                 {
                     _pendingBuild = _builder.BeginBuild(_ring.AllocateId(), _clock.CurrentTick, due.Value);
                 }
-                else if (_pendingBuild == null && LevelAccess.LevelReady && settled && inMap && !_scenesWithStartAnchor.Contains(sceneKey))
+                else if (_pendingBuild == null && !inBase && LevelAccess.LevelReady && settled && !_scenesWithStartAnchor.Contains(sceneKey))
                 {
-                    // 回到地图场景且尚无起点锚点时补建：该地图内不足回溯窗口长度时，回退目标就是它
+                    // 当前场景尚无起点锚点时补建：该场景内不足回溯窗口长度时，回退目标就是它
                     _pendingBuild = _builder.BeginBuild(_ring.AllocateId(), _clock.CurrentTick, _levelStartTick ?? _clock.CurrentTick);
                 }
             }
 
-            // 场景切换：地图场景锚点保留；离开（地道/换图过渡）只暂停记录，
-            // 新地图的清空与重建由 OnLevelEnded/OnLevelStarted 负责
+            // active scene 切换：清理进行中的锚点构建，并推进静置窗口避免在过渡帧采集
             if (_lastSceneKey == null)
             {
                 _lastSceneKey = sceneKey;
@@ -200,6 +210,10 @@ namespace DeathRewind
             {
                 _lastSceneKey = sceneKey;
                 _pendingBuild = null;
+                // 新场景需要重新静置，MultiSceneLoading 仍会继续推这个时间戳
+                _startAnchorNotBeforeTick = Math.Max(_startAnchorNotBeforeTick, _clock.CurrentTick + StartAnchorSettleSeconds);
+                // 首次稳定下来的 active scene 记为"主要游玩场景"（只作日志标识，后续楼层/地道切换不再重设）
+                if (_mapSceneKey == null) _mapSceneKey = sceneKey;
             }
 
             // 推进正在进行的锚点构建：采集分帧进行，文件 IO 在后台线程
@@ -221,7 +235,10 @@ namespace DeathRewind
                         {
                             _sampler.ReleaseAnchor(old);
                             if (old.SceneKey != null && _levelStartAnchors.TryGetValue(old.SceneKey, out var start) && old == start)
-                                _levelStartAnchors.Remove(old.SceneKey);   // 起点锚点出环后不可再回溯到它
+                            {
+                                _levelStartAnchors.Remove(old.SceneKey);        // 起点锚点出环后不可再回溯到它
+                                _scenesWithStartAnchor.Remove(old.SceneKey);     // 允许稍后回该场景时重建起点锚点
+                            }
                         }
                         _sampler.SetAnchorCoverage(_ring.Anchors);
                         // 每个场景的第一个锚点 = 进入该场景那一刻
@@ -230,14 +247,18 @@ namespace DeathRewind
                             _levelStartAnchors[anchor.SceneKey] = anchor;
                             _scenesWithStartAnchor.Add(anchor.SceneKey);
                         }
-                        Debug.Log($"[DeathRewind] anchor created id={anchor.Id} gridTs={anchor.GridTimestamp} absTs={anchor.AbsTimestamp}");
+                        ModLog.Log($"[DeathRewind] anchor created id={anchor.Id} gridTs={anchor.GridTimestamp} absTs={anchor.AbsTimestamp}");
                     }
                 }
             }
 
             // HUD "1up" 硬币指示：与死亡拦截同一判定（RewindCount < MaxRewinds），
             // 还有回溯机会时显示、用掉后自动隐藏；HUD 未就绪时内部带 1s 重试节流
-            RewindIndicator.SetAvailable(_ring != null && _ring.RewindCount < _config.MaxRewinds);
+            // 基地（Base）是安全屋没有回溯场景，不显示 1UP
+            bool shouldShow = _ring != null
+                && _ring.RewindCount < _config.MaxRewinds
+                && !LevelAccess.InBaseLevel;
+            RewindIndicator.SetAvailable(shouldShow);
 
             HandleDebugHotkeys();
         }
@@ -245,6 +266,7 @@ namespace DeathRewind
         private void HandleLevelStarted()
         {
             // 时钟不复位（有效 tick 必须单调），只重置网格原点与状态
+            ModLog.Log($"[DR-Trace] HandleLevelStarted → 调用 _ring.Clear()（RewindCount 将从 {_ring.RewindCount} 归零）");
             _ring.Clear();
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _store.Clear();
@@ -254,29 +276,63 @@ namespace DeathRewind
             _nextSampleAt = _clock.CurrentTick;
             _levelStartTick = _clock.CurrentTick;
             _startAnchorNotBeforeTick = _clock.CurrentTick + StartAnchorSettleSeconds;
-            // 本图的实际游玩场景 = level started 时激活的场景（此时地图子场景已加载激活）
-            _mapSceneKey = LevelAccess.CurrentSceneKey;
+            // mapSceneKey 不再在 OnLevelInitialized 时刻钉死——该时刻 active scene 通常还是壳场景
+            // （Level_JLab_Main / Level_HiddenWarehouse_Main），addtive 游玩层加载要等几百毫秒之后。
+            // 留 null 让 Update 在首次 active scene 稳定时自然记录。
+            _mapSceneKey = null;
+            _lastSceneKey = null;
             _levelStartAnchors.Clear();
-            _scenesWithStartAnchor.Clear();   // 进图后立刻为地图场景建起点锚点（静置窗口后触发）
-            Debug.Log($"[DeathRewind] level started: mapScene={_mapSceneKey} anchors/rewindCount/store reset at tick={_clock.CurrentTick}");
+            _scenesWithStartAnchor.Clear();
+            ModLog.Log($"[DeathRewind] level started: anchors/rewindCount/store reset at tick={_clock.CurrentTick}");
         }
 
-        private void HandleSubSceneLoaded()
+        private void HandleSubSceneLoaded(string sceneName)
         {
             // 只刷新注册表，不清锚点环、不归零回退计数（规格 §8.2）
             _sampler.RefreshRegistry();
-            Debug.Log($"[DeathRewind] subscene loaded: anchors={_ring.Anchors.Count} rewindCount={_ring.RewindCount}");
+
+            // 子场景重新加载 = 全新实例：同名场景的旧锚点属于上一次访问，
+            // 场景世界原点可能随传送点变化，留着会把玩家回溯到上一次访问的位置 → 丢弃
+            DropSceneAnchors(sceneName);
+
+            ModLog.Log($"[DeathRewind] subscene loaded: scene={sceneName} anchors={_ring.Anchors.Count} rewindCount={_ring.RewindCount}");
+        }
+
+        /// <summary>
+        /// 丢弃某个场景的全部锚点与起点锚点（子场景重新加载时调用）。
+        /// 该场景下次进入会重建自己的起点锚点，等价于"重新进图"。
+        /// </summary>
+        private void DropSceneAnchors(string sceneName)
+        {
+            if (string.IsNullOrEmpty(sceneName) || _ring == null) return;
+
+            var removed = new List<Anchor>();
+            int count = _ring.RemoveByScene(sceneName, removed);
+            foreach (var old in removed)
+            {
+                _sampler.ReleaseAnchor(old);
+            }
+
+            // 起点锚点可能已不在环里（例如被回溯丢弃），一并清掉，保证下次进入重建
+            if (_levelStartAnchors.Remove(sceneName)) _scenesWithStartAnchor.Remove(sceneName);
+
+            if (count > 0)
+            {
+                _sampler.SetAnchorCoverage(_ring.Anchors);
+                ModLog.Log($"[DeathRewind] 丢弃旧场景锚点: scene={sceneName} count={count} 剩余={_ring.Anchors.Count}");
+            }
         }
 
         private void HandleLevelEnded()
         {
+            ModLog.Log("[DR-Trace] HandleLevelEnded invoked — CLEARING RING (source unknown)");
             ReleaseTimeScale();
             _ring.Clear();
             _store.Clear();
             _sampler.DestroyAllTrackedEnemies();
             _sampler.ResetRegistry();
             AnchorBuilder.DeleteAllAnchorFiles();
-            Debug.Log("[DeathRewind] level ended: state cleared");
+            ModLog.Log("[DeathRewind] level ended: state cleared");
         }
 
         private void HandleDebugHotkeys()
@@ -289,7 +345,7 @@ namespace DeathRewind
                 if (elapsed >= _config.DebugAutoDeathAfter)
                 {
                     _levelStartTick = null;   // 只触发一次
-                    Debug.Log($"[DeathRewind] debug auto death after {elapsed:0.0}s");
+                    ModLog.Log($"[DeathRewind] debug auto death after {elapsed:0.0}s");
                     TriggerDebugDeath();
                 }
             }
@@ -317,7 +373,7 @@ namespace DeathRewind
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 调试致死经 Health.Hurt 失败（{e.Message}），改用直接触发死亡事件");
+                ModLog.LogWarning($"[DeathRewind] 调试致死经 Health.Hurt 失败（{e.Message}），改用直接触发死亡事件");
             }
             // 兜底：与 Health.Hurt 的死亡分支等价 —— 置零血量、置死亡标记、触发 OnDeadEvent
             try
@@ -359,7 +415,18 @@ namespace DeathRewind
         }
 
         // 供 DeathInterceptor 调用
-        public void ReleaseAnchor(Anchor anchor) => _sampler?.ReleaseAnchor(anchor);
+        public void ReleaseAnchor(Anchor anchor)
+        {
+            _sampler?.ReleaseAnchor(anchor);
+            // 起点锚点被丢弃后不能再作为"回到进图位置"的回退目标
+            if (anchor?.SceneKey != null
+                && _levelStartAnchors.TryGetValue(anchor.SceneKey, out var start)
+                && start == anchor)
+            {
+                _levelStartAnchors.Remove(anchor.SceneKey);
+                _scenesWithStartAnchor.Remove(anchor.SceneKey);
+            }
+        }
         public void ReleaseCommittedDestroy() => _sampler?.DestroyDeferredEnemies();
     }
 }

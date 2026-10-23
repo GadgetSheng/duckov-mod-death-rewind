@@ -4,6 +4,8 @@ using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
 using DeathRewind.Core;
+using Duckov.Buffs;
+using Duckov.Utilities;
 using ItemStatsSystem;
 using Saves;
 using UnityEngine;
@@ -287,7 +289,7 @@ namespace DeathRewind.Unity
             }
             // OverwriteFrom 内部已调用 SavesSystem.SetFile(CurrentSlot)（缓存指向主存档路径并触发 OnSetFile）
             try { SavesSystem.SetFile(SavesSystem.CurrentSlot); }
-            catch (Exception e) { Debug.LogWarning($"[DeathRewind] 磁盘回滚后重载存档失败: {e.Message}"); }
+            catch (Exception e) { ModLog.LogWarning($"[DeathRewind] 磁盘回滚后重载存档失败: {e.Message}"); }
             return true;
         }
 
@@ -380,7 +382,7 @@ namespace DeathRewind.Unity
             catch { /* 反射失败：跳过清理，避免误删 */ }
             if (getKey == null)
             {
-                Debug.LogWarning("[DeathRewind] InteractableLootbox.GetKey 反射失败，跳过多余战利品箱清理");
+                ModLog.LogWarning("[DeathRewind] InteractableLootbox.GetKey 反射失败，跳过多余战利品箱清理");
                 return;
             }
 
@@ -398,7 +400,7 @@ namespace DeathRewind.Unity
                 UnityEngine.Object.Destroy(box.gameObject);
                 removed++;
             }
-            if (removed > 0) Debug.Log($"[DeathRewind] restore phase=C 移除锚点后新增战利品箱 x{removed}");
+            if (removed > 0) ModLog.Log($"[DeathRewind] restore phase=C 移除锚点后新增战利品箱 x{removed}");
         }
 
         // ------------------------------------------------------------------ 阶段 D
@@ -502,7 +504,7 @@ namespace DeathRewind.Unity
                 catch (Exception e)
                 {
                     AddUncovered($"enemy:{job.Key}:items");
-                    Debug.LogWarning($"[DeathRewind] 敌人 {job.Key} 物品还原失败: {e.Message}");
+                    ModLog.LogWarning($"[DeathRewind] 敌人 {job.Key} 物品还原失败: {e.Message}");
                 }
             }
         }
@@ -721,7 +723,7 @@ namespace DeathRewind.Unity
                 if (slots != null && slots.Length > 0 && main.CharacterItem != null)
                 {
                     bool slotsOk = await WithTimeout(InventoryPayload.ApplySlotsAsync(slots, main.CharacterItem), PhaseTimeoutSeconds, "E2");
-                    if (!slotsOk) Debug.LogWarning("[DeathRewind] 玩家装备槽还原不完整（非致命）");
+                    if (!slotsOk) ModLog.LogWarning("[DeathRewind] 玩家装备槽还原不完整（非致命）");
                 }
                 }   // end if (IsFullScope())
 
@@ -757,7 +759,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 回灌背包副本失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 回灌背包副本失败: {e.Message}");
                 return false;
             }
         }
@@ -832,19 +834,20 @@ namespace DeathRewind.Unity
                 if (receiver != null) receiver.gameObject.SetActive(true);
                 ResetPlayerCombatState(main);
                 main.gameObject.SetActive(true);
+                ClearEnemyAggro();
 
                 var aim = UnityEngine.Object.FindFirstObjectByType<AimMarker>();
                 if (aim != null && aim.rootCanvasGroup != null) aim.rootCanvasGroup.alpha = 1f;
 
                 var h = main.Health;
-                Debug.Log($"[DeathRewind] revive sanity: hp={h?.CurrentHealth} isDead={h?.IsDead} invincible={h?.Invincible} " +
+                ModLog.Log($"[DeathRewind] revive sanity: hp={h?.CurrentHealth} isDead={h?.IsDead} invincible={h?.Invincible} " +
                           $"playerActive={main.gameObject.activeSelf} healthActive={h?.gameObject.activeSelf} " +
                           $"receiverActive={(receiver != null && receiver.gameObject.activeSelf)} " +
                           $"crosshair={(aim != null && aim.rootCanvasGroup != null ? aim.rootCanvasGroup.alpha : -1f)}");
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 复活表现层恢复失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 复活表现层恢复失败: {e.Message}");
             }
         }
 
@@ -873,29 +876,35 @@ namespace DeathRewind.Unity
                 var health = main.Health;
                 if (health != null) health.team = Teams.player;
 
-                // ③ 接收器深度复位：组件启用翻转 + 层重置 + 调用原生 Reset（若存在）
+                // ③ 接收器深度复位：组件启用翻转 + 调用原生 Reset（若存在）。
+                //    注意：DamageReceiver 自身 GameObject 的 layer **绝不能改**——
+                //    若 receiver 挂在 CharacterMainControl 本体或与其 Collider 共享 GO，
+                //    改 layer 会让 CountDownArea / DoorTrigger / 区域触发器的 layerMask 过滤失效，
+                //    表现为复活后进撤离点不计时、区域门不开等。enable 翻转已足够让 Unity 重建接触对。
                 var receiver = main.mainDamageReceiver;
                 if (receiver != null)
                 {
+                    int before = receiver.gameObject.layer;
                     receiver.enabled = false;
                     receiver.enabled = true;
-                    int layerId = LayerMask.NameToLayer("DamageReceiver");
-                    if (layerId >= 0) receiver.gameObject.layer = layerId;
                     typeof(DamageReceiver).GetMethod("Reset", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
                         ?.Invoke(receiver, null);
+                    ModLog.Log($"[DeathRewind] DamageReceiver 复位: GO={receiver.gameObject.name} layer={before}(未改)");
                 }
 
-                // ③' 全部子碰撞体重注册（CharacterController 除外；参考 SekiroMod：全翻非触发器）
-                int layer = LayerMask.NameToLayer("DamageReceiver");
+                // ③' 全部子碰撞体重注册（CharacterController 除外）：只做 enabled 翻转让 Unity 重建接触对。
+                //     绝不能改 layer / isTrigger：玩家身体碰撞体原本在 "Character" 层，
+                //     CountDownArea（撤离点）、DoorTrigger、区域触发器都按该层判定，
+                //     改成 DamageReceiver 后触发器不再响应 → 复活后进撤离点无效的根因。
+                int colliderCount = 0;
                 foreach (var col in main.GetComponentsInChildren<Collider>(true))
                 {
                     if (col is CharacterController) continue;
                     col.enabled = false;
                     col.enabled = true;
-                    col.isTrigger = false;
-                    if (layer >= 0) col.gameObject.layer = layer;
-                    if (col is MeshCollider mesh) mesh.convex = true;
+                    colliderCount++;
                 }
+                ModLog.Log($"[DeathRewind] 碰撞体复位: {colliderCount} 个（保留原 layer/isTrigger）");
 
                 // ④ 刚体清速
                 foreach (var rb in main.GetComponentsInChildren<Rigidbody>(true))
@@ -906,11 +915,101 @@ namespace DeathRewind.Unity
                 }
                 try { main.SetForceMoveVelocity(Vector3.zero); }
                 catch { /* movementControl 不可用则跳过 */ }
+
+                // ⑤ 状态清除：position 轻量模式不回溯 buff 层，
+                //     死亡瞬间的流血/中毒/疼痛等会被原样带进复活（复活即被继续扣血），
+                //     这里把死亡时残留的 buff 全部移除，只保留游戏注入的 BaseBuff。
+                ClearStatusBuffs(main);
+
                 Physics.SyncTransforms();
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 战斗状态深度复位失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 战斗状态深度复位失败: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 复活后清除死亡时残留的状态 buff（流血/中毒/疼痛/骨折/负重等）。
+        /// position 轻量回溯不覆盖 buff 层，这些状态若留着会让玩家复活后继续掉血。
+        /// BaseBuff（非突袭地图由游戏注入的基底 buff）保留，避免影响基础属性。
+        /// </summary>
+        private static void ClearStatusBuffs(CharacterMainControl main)
+        {
+            try
+            {
+                var manager = main.GetBuffManager();
+                if (manager == null) return;
+
+                int baseBuffId = -1;
+                try
+                {
+                    var baseBuff = GameplayDataSettings.Buffs?.BaseBuff;
+                    if (baseBuff != null) baseBuffId = baseBuff.ID;
+                }
+                catch { /* 配置缺失时退化为全部清除 */ }
+
+                var snapshot = new List<Buff>(manager.Buffs);
+                int cleared = 0;
+                foreach (var buff in snapshot)
+                {
+                    if (buff == null || buff.ID == baseBuffId) continue;
+                    try
+                    {
+                        manager.RemoveBuff(buff, false);
+                        cleared++;
+                    }
+                    catch (Exception e)
+                    {
+                        ModLog.LogWarning($"[DeathRewind] 清除状态 buff={buff.ID} 失败: {e.Message}");
+                    }
+                }
+                ModLog.Log($"[DeathRewind] 状态清除: {cleared} 个 buff（保留 BaseBuff）");
+            }
+            catch (Exception e)
+            {
+                ModLog.LogWarning($"[DeathRewind] 状态清除失败: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 复活后清除敌人对玩家的仇恨。
+        /// position 轻量回溯不覆盖 AI 层，死亡瞬间已锁定玩家的敌人会继续追打复活后的玩家。
+        /// 复位原生仇恨字段（searchedEnemy / aimTarget / noticed / lastDamageInfo），
+        /// 战斗行为树下一帧失去目标后回到巡逻；forceTracePlayerDistance 属于近身强制索敌，
+        /// 不复位——复活即贴脸时本来就该被发现。
+        /// </summary>
+        private static void ClearEnemyAggro()
+        {
+            try
+            {
+                var ais = UnityEngine.Object.FindObjectsByType<AICharacterController>(FindObjectsSortMode.None);
+                int cleared = 0;
+                foreach (var ai in ais)
+                {
+                    if (ai == null) continue;
+                    var self = ai.CharacterMainControl;
+                    if (self == null) continue;
+                    try
+                    {
+                        if (!Team.IsEnemy(self.Team, Teams.player)) continue;   // 玩家/宠物/友军跳过
+                    }
+                    catch { continue; }
+
+                    bool hadAggro = ai.searchedEnemy != null || ai.aimTarget != null || ai.noticed;
+                    ai.searchedEnemy = null;
+                    ai.aimTarget = null;
+                    ai.noticed = false;
+                    ai.foundDangerObject = null;
+                    ai.lastDamageInfo = default;
+                    ai.hurtTimeMarker = -999f;
+                    if (hadAggro) cleared++;
+                }
+                ModLog.Log($"[DeathRewind] 敌人仇恨清除: {cleared}/{ais.Length} 个");
+            }
+            catch (Exception e)
+            {
+                ModLog.LogWarning($"[DeathRewind] 敌人仇恨清除失败: {e.Message}");
             }
         }
 
@@ -1154,7 +1253,7 @@ namespace DeathRewind.Unity
 
         private static void Log(RestorePhase phase, string result)
         {
-            Debug.Log($"[DeathRewind] restore phase={phase} result={result}");
+            ModLog.Log($"[DeathRewind] restore phase={phase} result={result}");
         }
 
         private void LogPlayerState()
@@ -1177,14 +1276,14 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 读取玩家状态失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 读取玩家状态失败: {e.Message}");
             }
-            Debug.Log($"[DeathRewind] restore player hp={hp} pos={pos.x},{pos.y},{pos.z} bagItems={items} raidDead={(raidDead ? "true" : "false")}");
+            ModLog.Log($"[DeathRewind] restore player hp={hp} pos={pos.x},{pos.y},{pos.z} bagItems={items} raidDead={(raidDead ? "true" : "false")}");
         }
 
         private void LogWorldDiff()
         {
-            Debug.Log($"[DeathRewind] world diff enemies={_enemiesChanged} doorsChanged={_doorsChanged} containersChanged={_containersChanged} timeRestored={_timeRestored} worldState={_worldState}");
+            ModLog.Log($"[DeathRewind] world diff enemies={_enemiesChanged} doorsChanged={_doorsChanged} containersChanged={_containersChanged} timeRestored={_timeRestored} worldState={_worldState}");
         }
 
         /// <summary>元系统摘要：EXP 与任务键。键名优先从游戏私有字段读取，读不到再用常量兜底（实施时以游戏实际键名为准）。</summary>
@@ -1204,12 +1303,12 @@ namespace DeathRewind.Unity
                 if (value != null) quests = Summarize(value);
             }
             catch { quests = "?"; }
-            Debug.Log($"[DeathRewind] meta exp={exp} quests={quests}");
+            ModLog.Log($"[DeathRewind] meta exp={exp} quests={quests}");
         }
 
         private void LogUncovered()
         {
-            Debug.Log($"[DeathRewind] uncovered={string.Join(",", _uncovered)}");
+            ModLog.Log($"[DeathRewind] uncovered={string.Join(",", _uncovered)}");
         }
 
         private void DumpPreState()
@@ -1244,19 +1343,19 @@ namespace DeathRewind.Unity
             }
             catch { /* 忽略：明细日志不影响恢复流程 */ }
 
-            Debug.Log($"[DeathRewind][verbose] phase={tag} entity=player:main alive={playerAlive} hp={playerHp} items={playerItems}");
+            ModLog.Log($"[DeathRewind][verbose] phase={tag} entity=player:main alive={playerAlive} hp={playerHp} items={playerItems}");
             foreach (var kv in s.Enemies)
             {
                 var e = kv.Value;
-                Debug.Log($"[DeathRewind][verbose] phase={tag} entity=enemy:{kv.Key} alive={(e != null && e.Alive)} hp={(e != null ? e.Health : 0f)}");
+                ModLog.Log($"[DeathRewind][verbose] phase={tag} entity=enemy:{kv.Key} alive={(e != null && e.Alive)} hp={(e != null ? e.Health : 0f)}");
             }
             foreach (var kv in s.Doors)
             {
-                Debug.Log($"[DeathRewind][verbose] phase={tag} entity=door:{kv.Key} alive=true closed={(kv.Value != null && kv.Value.Closed)}");
+                ModLog.Log($"[DeathRewind][verbose] phase={tag} entity=door:{kv.Key} alive=true closed={(kv.Value != null && kv.Value.Closed)}");
             }
             foreach (var kv in s.Containers)
             {
-                Debug.Log($"[DeathRewind][verbose] phase={tag} entity=container:{kv.Key} alive=true items={CountPayloadItems(kv.Value?.ItemPayload)}");
+                ModLog.Log($"[DeathRewind][verbose] phase={tag} entity=container:{kv.Key} alive=true items={CountPayloadItems(kv.Value?.ItemPayload)}");
             }
         }
 
@@ -1457,7 +1556,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 写回 RaidInfo 内存态失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 写回 RaidInfo 内存态失败: {e.Message}");
             }
         }
     }

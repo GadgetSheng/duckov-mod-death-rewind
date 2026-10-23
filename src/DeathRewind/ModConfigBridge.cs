@@ -33,20 +33,20 @@ namespace DeathRewind
                 }
                 if (_modBehaviourType == null || _optionsManagerType == null)
                 {
-                    Debug.Log("[DeathRewind] ModConfig 框架未安装，跳过游戏内配置接入（继续使用 config.txt）");
+                    ModLog.Log("[DeathRewind] ModConfig 框架未安装，跳过游戏内配置接入（继续使用 config.txt）");
                     return false;
                 }
                 if (_modBehaviourType.GetField("VERSION")?.GetValue(null) is int v && v != 1)
                 {
-                    Debug.LogWarning($"[DeathRewind] ModConfig API 版本不匹配（框架 v{v}，桥接 v1），跳过接入");
+                    ModLog.LogWarning($"[DeathRewind] ModConfig API 版本不匹配（框架 v{v}，桥接 v1），跳过接入");
                     _modBehaviourType = null;
                     return false;
                 }
-                Debug.Log("[DeathRewind] ModConfig 框架已接入");
+                ModLog.Log("[DeathRewind] ModConfig 框架已接入");
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] ModConfig 接入失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] ModConfig 接入失败: {e.Message}");
                 _modBehaviourType = null;
             }
             return _modBehaviourType != null;
@@ -69,7 +69,7 @@ namespace DeathRewind
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] ModConfig 注册 {key} 失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] ModConfig 注册 {key} 失败: {e.Message}");
             }
         }
 
@@ -83,7 +83,7 @@ namespace DeathRewind
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] ModConfig 注册 {key} 失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] ModConfig 注册 {key} 失败: {e.Message}");
             }
         }
 
@@ -97,7 +97,7 @@ namespace DeathRewind
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] ModConfig 注册 {key} 失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] ModConfig 注册 {key} 失败: {e.Message}");
             }
         }
 
@@ -111,7 +111,7 @@ namespace DeathRewind
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] ModConfig 注册回调失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] ModConfig 注册回调失败: {e.Message}");
             }
         }
 
@@ -128,7 +128,7 @@ namespace DeathRewind
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] ModConfig 读取 {key} 失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] ModConfig 读取 {key} 失败: {e.Message}");
                 return fallback;
             }
         }

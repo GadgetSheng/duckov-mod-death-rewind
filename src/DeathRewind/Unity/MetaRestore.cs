@@ -41,13 +41,13 @@ namespace DeathRewind.Unity
                     {
                         File.Copy(tmp, targetAbs, true);
                         File.Delete(tmp);
-                        Debug.LogWarning("[DeathRewind] File.Replace 不可用，退化为覆盖写主存档");
+                        ModLog.LogWarning("[DeathRewind] File.Replace 不可用，退化为覆盖写主存档");
                     }
                     catch (NotSupportedException)
                     {
                         File.Copy(tmp, targetAbs, true);
                         File.Delete(tmp);
-                        Debug.LogWarning("[DeathRewind] File.Replace 不可用，退化为覆盖写主存档");
+                        ModLog.LogWarning("[DeathRewind] File.Replace 不可用，退化为覆盖写主存档");
                     }
                 }
                 else

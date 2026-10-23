@@ -55,7 +55,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 缩略图抓取失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 缩略图抓取失败: {e.Message}");
                 return null;
             }
         }

@@ -24,7 +24,7 @@ namespace DeathRewind.Harmony
         {
             if (!HarmonyGuard.CanRegister("com.deathrewind.hurtgate"))
             {
-                Debug.LogWarning("[DeathRewind] 因 Harmony 冲突，伤害门控诊断补丁未启用");
+                ModLog.LogWarning("[DeathRewind] 因 Harmony 冲突，伤害门控诊断补丁未启用");
                 return;
             }
             var hurt = AccessTools.Method(typeof(Health), "Hurt");
@@ -60,7 +60,7 @@ namespace DeathRewind.Harmony
                 _nextHurtLogAt = now + LogIntervalSeconds;
 
                 bool loading = MultiSceneCore.Instance != null && MultiSceneCore.Instance.IsLoading;
-                Debug.LogWarning("[DeathRewind] 主角伤害被拦截（Hurt=false）: "
+                ModLog.LogWarning("[DeathRewind] 主角伤害被拦截（Hurt=false）: "
                     + $"invincible={__instance.Invincible} isDead={__instance.IsDead} "
                     + $"isLoading={loading} hp={__instance.CurrentHealth:0.##}");
             }
@@ -80,7 +80,7 @@ namespace DeathRewind.Harmony
                 if (now < _nextInvincibleLogAt) return;
                 _nextInvincibleLogAt = now + LogIntervalSeconds;
 
-                Debug.LogWarning("[DeathRewind] 主角被置为无敌（SetInvincible(true)），调用栈:\n" + new StackTrace(false));
+                ModLog.LogWarning("[DeathRewind] 主角被置为无敌（SetInvincible(true)），调用栈:\n" + new StackTrace(false));
             }
             catch
             {

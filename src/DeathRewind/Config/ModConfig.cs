@@ -45,7 +45,7 @@ namespace DeathRewind.Config
         {
             var cfg = new ModConfig();
             var path = FilePath;
-            Debug.Log($"[DeathRewind] config path: {path}");
+            ModLog.Log($"[DeathRewind] config path: {path}");
             if (File.Exists(path))
             {
                 var raw = new Dictionary<string, string>();
@@ -103,15 +103,15 @@ namespace DeathRewind.Config
 
         private void Validate()
         {
-            if (AnchorInterval <= 0) { Debug.LogWarning("[DeathRewind] anchorInterval 非法，回落 5"); AnchorInterval = 5; }
-            if (AnchorCount < 2) { Debug.LogWarning("[DeathRewind] anchorCount 非法，回落 16"); AnchorCount = 16; }
-            if (SampleInterval <= 0) { Debug.LogWarning("[DeathRewind] sampleInterval 非法，回落 0.25"); SampleInterval = 0.25; }
-            if (AnchorCaptureBatchSize < 1) { Debug.LogWarning("[DeathRewind] anchorCaptureBatchSize 非法，回落 2"); AnchorCaptureBatchSize = 2; }
-            if (AnchorCaptureBudgetMs <= 0) { Debug.LogWarning("[DeathRewind] anchorCaptureBudgetMs 非法，回落 2"); AnchorCaptureBudgetMs = 2; }
+            if (AnchorInterval <= 0) { ModLog.LogWarning("[DeathRewind] anchorInterval 非法，回落 5"); AnchorInterval = 5; }
+            if (AnchorCount < 2) { ModLog.LogWarning("[DeathRewind] anchorCount 非法，回落 16"); AnchorCount = 16; }
+            if (SampleInterval <= 0) { ModLog.LogWarning("[DeathRewind] sampleInterval 非法，回落 0.25"); SampleInterval = 0.25; }
+            if (AnchorCaptureBatchSize < 1) { ModLog.LogWarning("[DeathRewind] anchorCaptureBatchSize 非法，回落 2"); AnchorCaptureBatchSize = 2; }
+            if (AnchorCaptureBudgetMs <= 0) { ModLog.LogWarning("[DeathRewind] anchorCaptureBudgetMs 非法，回落 2"); AnchorCaptureBudgetMs = 2; }
             if (!string.Equals(RewindScope, "position", System.StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(RewindScope, "full", System.StringComparison.OrdinalIgnoreCase))
             {
-                Debug.LogWarning($"[DeathRewind] rewindScope 非法（{RewindScope}），回落 position");
+                ModLog.LogWarning($"[DeathRewind] rewindScope 非法（{RewindScope}），回落 position");
                 RewindScope = "position";
             }
             else
@@ -120,7 +120,7 @@ namespace DeathRewind.Config
             }
             if (MinRewindAge > AnchorCount * AnchorInterval)
             {
-                Debug.LogWarning($"[DeathRewind] minRewindAge({MinRewindAge}) > anchorCount*anchorInterval({AnchorCount * AnchorInterval})，回退将永远不可用，回落");
+                ModLog.LogWarning($"[DeathRewind] minRewindAge({MinRewindAge}) > anchorCount*anchorInterval({AnchorCount * AnchorInterval})，回退将永远不可用，回落");
                 MinRewindAge = AnchorCount * AnchorInterval;
             }
         }
@@ -134,7 +134,7 @@ namespace DeathRewind.Config
             if (bool.TryParse(v, out var b)) return b;
             if (v == "1") return true;
             if (v == "0") return false;
-            Debug.LogWarning($"[DeathRewind] 配置项 {key} 值非法（{v}），回落 {fallback}");
+            ModLog.LogWarning($"[DeathRewind] 配置项 {key} 值非法（{v}），回落 {fallback}");
             return fallback;
         }
 
@@ -142,7 +142,7 @@ namespace DeathRewind.Config
         {
             if (!raw.TryGetValue(key, out var v)) return fallback;
             if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return d;
-            Debug.LogWarning($"[DeathRewind] 配置项 {key} 值非法（{v}），回落 {fallback}");
+            ModLog.LogWarning($"[DeathRewind] 配置项 {key} 值非法（{v}），回落 {fallback}");
             return fallback;
         }
 
@@ -150,7 +150,7 @@ namespace DeathRewind.Config
         {
             if (!raw.TryGetValue(key, out var v)) return fallback;
             if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i)) return i;
-            Debug.LogWarning($"[DeathRewind] 配置项 {key} 值非法（{v}），回落 {fallback}");
+            ModLog.LogWarning($"[DeathRewind] 配置项 {key} 值非法（{v}），回落 {fallback}");
             return fallback;
         }
     }

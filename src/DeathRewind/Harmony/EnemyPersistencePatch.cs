@@ -17,7 +17,7 @@ namespace DeathRewind.Harmony
             _sampler = sampler;
             if (!HarmonyGuard.CanRegister("com.deathrewind.enemypersistence"))
             {
-                Debug.LogWarning("[DeathRewind] 因 Harmony 冲突，敌人持久化补丁未启用");
+                ModLog.LogWarning("[DeathRewind] 因 Harmony 冲突，敌人持久化补丁未启用");
                 return;
             }
             var target = AccessTools.Method(typeof(Health), "DestroyOnDelay");
@@ -50,7 +50,7 @@ namespace DeathRewind.Harmony
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 停用死亡敌人角色失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 停用死亡敌人角色失败: {e.Message}");
             }
             _sampler?.RegisterDeadEnemy(__instance);
             return false;

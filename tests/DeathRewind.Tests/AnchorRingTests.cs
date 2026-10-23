@@ -124,6 +124,99 @@ namespace DeathRewind.Tests
         }
 
         [Fact]
+        public void RemoveByScene_DropsOnlyThatScene_AndReturnsRemoved()
+        {
+            var ring = new AnchorRing(8, 120.0, 3, 60.0);
+            ring.ResetGridTo(0.0, 0.0);
+            var roomOld = new Anchor { Id = ring.AllocateId(), SceneKey = "Room_A", AbsTimestamp = 10, GridTimestamp = 10 };
+            var map = new Anchor { Id = ring.AllocateId(), SceneKey = "Map", AbsTimestamp = 20, GridTimestamp = 20 };
+            var roomNew = new Anchor { Id = ring.AllocateId(), SceneKey = "Room_A", AbsTimestamp = 30, GridTimestamp = 30 };
+            ring.Insert(roomOld, new List<Anchor>());
+            ring.Insert(map, new List<Anchor>());
+            ring.Insert(roomNew, new List<Anchor>());
+
+            var removed = new List<Anchor>();
+            int count = ring.RemoveByScene("Room_A", removed);
+
+            Assert.Equal(2, count);
+            Assert.Equal(2, removed.Count);
+            Assert.Single(ring.Anchors);
+            Assert.Equal("Map", ring.Anchors[0].SceneKey);
+
+            // 旧房间锚点不能再被当成当前场景的合格目标
+            ring.SetTick(300.0);
+            Assert.Null(ring.SelectTarget("Room_A"));
+            Assert.NotNull(ring.SelectTarget("Map"));
+        }
+
+        [Fact]
+        public void RemoveByScene_UnknownScene_IsNoop()
+        {
+            var ring = new AnchorRing(4, 120.0, 3, 60.0);
+            var map = new Anchor { Id = ring.AllocateId(), SceneKey = "Map", AbsTimestamp = 10, GridTimestamp = 10 };
+            ring.Insert(map, new List<Anchor>());
+
+            var removed = new List<Anchor>();
+            Assert.Equal(0, ring.RemoveByScene("Other", removed));
+            Assert.Empty(removed);
+            Assert.Single(ring.Anchors);
+        }
+
+        [Fact]
+        public void SelectTargets_ReturnsAgedAnchors_OldestFirst()
+        {
+            var ring = new AnchorRing(8, 120.0, 3, 60.0);
+            ring.ResetGridTo(0.0, 0.0);
+            for (int i = 1; i <= 5; i++)
+            {
+                var a = new Anchor { Id = ring.AllocateId(), SceneKey = "Map", AbsTimestamp = i * 50.0, GridTimestamp = i * 50.0 };
+                ring.Insert(a, new List<Anchor>());
+            }
+            ring.SetTick(300.0);
+
+            // 年龄 250/200/150 达标，100/50 不达标
+            var targets = ring.SelectTargets("Map", 4);
+            Assert.Equal(3, targets.Count);
+            Assert.Equal(50.0, targets[0].AbsTimestamp);            // 旧 → 新
+            Assert.Equal(150.0, targets[targets.Count - 1].AbsTimestamp);
+        }
+
+        [Fact]
+        public void SelectTargets_CapsToNewestMaxCount()
+        {
+            var ring = new AnchorRing(16, 120.0, 3, 60.0);
+            ring.ResetGridTo(0.0, 0.0);
+            for (int i = 1; i <= 8; i++)
+            {
+                var a = new Anchor { Id = ring.AllocateId(), SceneKey = "Map", AbsTimestamp = i * 25.0, GridTimestamp = i * 25.0 };
+                ring.Insert(a, new List<Anchor>());
+            }
+            ring.SetTick(300.0);
+
+            var targets = ring.SelectTargets("Map", 4);
+            Assert.Equal(4, targets.Count);
+            Assert.Equal(100.0, targets[0].AbsTimestamp);           // 保留最新的 4 个
+            Assert.Equal(175.0, targets[targets.Count - 1].AbsTimestamp);
+        }
+
+        [Fact]
+        public void SelectTargets_FiltersByScene()
+        {
+            var ring = new AnchorRing(8, 120.0, 3, 60.0);
+            ring.ResetGridTo(0.0, 0.0);
+            var map = new Anchor { Id = ring.AllocateId(), SceneKey = "Map", AbsTimestamp = 50.0, GridTimestamp = 50.0 };
+            var room = new Anchor { Id = ring.AllocateId(), SceneKey = "Room_A", AbsTimestamp = 60.0, GridTimestamp = 60.0 };
+            ring.Insert(map, new List<Anchor>());
+            ring.Insert(room, new List<Anchor>());
+            ring.SetTick(300.0);
+
+            var inRoom = ring.SelectTargets("Room_A", 4);
+            Assert.Single(inRoom);
+            Assert.Equal("Room_A", inRoom[0].SceneKey);
+            Assert.Single(ring.SelectTargets("Map", 4));
+        }
+
+        [Fact]
         public void GridOriginReset_KeepsExistingAnchorsSelectable()
         {
             var ring = new AnchorRing(4, 120.0, 3, 60.0);

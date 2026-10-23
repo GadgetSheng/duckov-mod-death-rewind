@@ -37,7 +37,7 @@ namespace DeathRewind.Harmony
                         return false;
                     }
                     if (v < ExpectedVersion)
-                        Debug.LogWarning($"[DeathRewind] 检测到其他 Mod 加载的旧版 Harmony {v}（本 Mod 携带 {ExpectedVersion}），API 兼容，补丁 {tag} 照常注册。");
+                        ModLog.LogWarning($"[DeathRewind] 检测到其他 Mod 加载的旧版 Harmony {v}（本 Mod 携带 {ExpectedVersion}），API 兼容，补丁 {tag} 照常注册。");
                 }
                 return true;
             }

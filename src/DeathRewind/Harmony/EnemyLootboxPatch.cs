@@ -26,7 +26,7 @@ namespace DeathRewind.Harmony
             _sampler = sampler;
             if (!HarmonyGuard.CanRegister("com.deathrewind.enemylootbox"))
             {
-                Debug.LogWarning("[DeathRewind] 因 Harmony 冲突，敌人装备保留补丁未启用");
+                ModLog.LogWarning("[DeathRewind] 因 Harmony 冲突，敌人装备保留补丁未启用");
                 return;
             }
             var target = AccessTools.Method(typeof(InteractableLootbox), "CreateFromItem", new[]

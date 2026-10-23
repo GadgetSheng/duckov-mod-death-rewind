@@ -88,7 +88,7 @@ namespace DeathRewind.Unity
             if (full && anchor.Player != null)
             {
                 try { anchor.Player.Slots = InventoryPayload.CaptureSlots(LevelAccess.MainCharacter?.CharacterItem); }
-                catch (Exception e) { Debug.LogWarning($"[DeathRewind] 玩家装备槽采集失败: {e.Message}"); }
+                catch (Exception e) { ModLog.LogWarning($"[DeathRewind] 玩家装备槽采集失败: {e.Message}"); }
             }
 
             foreach (var key in _store.EnemyKeys)
@@ -110,7 +110,7 @@ namespace DeathRewind.Unity
                             st.Slots = InventoryPayload.CaptureSlots(charItem);
                         }
                     }
-                    catch (Exception e) { Debug.LogWarning($"[DeathRewind] 敌人 {key} 物品采集失败: {e.Message}"); }
+                    catch (Exception e) { ModLog.LogWarning($"[DeathRewind] 敌人 {key} 物品采集失败: {e.Message}"); }
                 }
                 anchor.Enemies[key] = st;
             }
@@ -261,11 +261,11 @@ namespace DeathRewind.Unity
             catch (Exception e) { ctx.IoError = e.Message; }
             if (!ok)
             {
-                Debug.LogWarning($"[DeathRewind] 锚点 {ctx.Id} 落盘失败（{ctx.IoError ?? "主存档副本校验未通过"}），该锚点不可用于回退");
+                ModLog.LogWarning($"[DeathRewind] 锚点 {ctx.Id} 落盘失败（{ctx.IoError ?? "主存档副本校验未通过"}），该锚点不可用于回退");
                 return null;
             }
             if (IsFullScope()) VerifyPlayerPayload(ctx.Anchor);   // position 模式不还原背包，跳过昂贵的往返自检
-            Debug.Log($"[DeathRewind] 锚点 {ctx.Id} 构建完成: 主线程采集 {ctx.CaptureMs}ms（{ctx.ContainerKeys.Count} 个容器）/ 后台 IO {ctx.IoMs}ms / 合计 {ctx.CaptureMs + ctx.IoMs}ms");
+            ModLog.Log($"[DeathRewind] 锚点 {ctx.Id} 构建完成: 主线程采集 {ctx.CaptureMs}ms（{ctx.ContainerKeys.Count} 个容器）/ 后台 IO {ctx.IoMs}ms / 合计 {ctx.CaptureMs + ctx.IoMs}ms");
             return ctx.Anchor;
         }
 
@@ -326,11 +326,11 @@ namespace DeathRewind.Unity
             {
                 var main = LevelAccess.MainCharacter;
                 if (main != null && !InventoryPayload.VerifyRoundTrip(main.CharacterItem?.Inventory))
-                    Debug.LogWarning($"[DeathRewind] 锚点 {anchor?.Id} 玩家背包载荷往返自检失败");
+                    ModLog.LogWarning($"[DeathRewind] 锚点 {anchor?.Id} 玩家背包载荷往返自检失败");
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 锚点 {anchor?.Id} 载荷自检失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 锚点 {anchor?.Id} 载荷自检失败: {e.Message}");
             }
         }
 
@@ -363,7 +363,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 读取锚点载荷失败 {anchor.ContainerPayloadPath}: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 读取锚点载荷失败 {anchor.ContainerPayloadPath}: {e.Message}");
                 return false;
             }
         }
@@ -420,7 +420,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 清理锚点文件失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 清理锚点文件失败: {e.Message}");
             }
         }
 
@@ -440,7 +440,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 清理孤儿锚点文件失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 清理孤儿锚点文件失败: {e.Message}");
             }
         }
 
@@ -473,7 +473,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 删除文件失败 {path}: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 删除文件失败 {path}: {e.Message}");
             }
         }
 
@@ -486,7 +486,7 @@ namespace DeathRewind.Unity
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[DeathRewind] 读取世界时间失败: {e.Message}");
+                ModLog.LogWarning($"[DeathRewind] 读取世界时间失败: {e.Message}");
                 return 0f;
             }
         }
