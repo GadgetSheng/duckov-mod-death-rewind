@@ -36,11 +36,20 @@ deploy_to() {
 
 deploy_to "$MODS_DIR"
 
-# 游戏加载顺序：workshop 优先 → Contents/Mods 其次，
-# 所以 workshop 永远是实际生效的那份，构建后必须同步。
-if [ -n "$WORKSHOP_DIR" ] && [ -d "$WORKSHOP_DIR" ]; then
-    deploy_to "$WORKSHOP_DIR"
-    echo "⚠️  游戏优先加载 workshop 目录，本次同步已覆盖生效路径"
+# —— workshop 目录同步：默认关闭 ——
+# 游戏加载顺序是 workshop 优先 → Contents/Mods 其次，
+# 但发布走游戏内 Workshop 上传界面，Steam 会自动拉最新版。
+# 只有需要立即让本地副本生效时才手动开启：
+#     WORKSHOP_DEPLOY=1 bash tools/build.sh
+# 精确匹配 publishedFileId，避免 find head -1 误伤其他 Mod 目录。
+if [ "${WORKSHOP_DEPLOY:-0}" = "1" ]; then
+    if [ -n "$WORKSHOP_DIR" ] && [ -d "$WORKSHOP_DIR" ]; then
+        deploy_to "$WORKSHOP_DIR"
+        echo "✅ workshop 同步完成（${WORKSHOP_DIR:-}）"
+    else
+        echo "❌ WORKSHOP_DEPLOY=1 但 WORKSHOP_DIR 未找到，publishedFileId=$PUBLISHED_ID" >&2
+        exit 1
+    fi
 else
-    echo "⚠️  WORKSHOP_DIR 未找到，只部署到 Contents/Mods —— 请手动同步 workshop/content/3167020/<id>/ 下的 4 个文件"
+    echo "（workshop 同步已关闭，需要立即生效时加 WORKSHOP_DEPLOY=1）"
 fi
