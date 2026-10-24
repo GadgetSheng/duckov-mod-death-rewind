@@ -99,7 +99,9 @@ namespace DeathRewind.UI
             if (_nativeParent == null) throw new InvalidOperationException("原生按钮缺少 RectTransform 父节点");
 
             _candidates = candidates != null ? new List<RewindCandidate>(candidates) : new List<RewindCandidate>();
-            _selectedIndex = _candidates.Count > 0 ? _candidates.Count - 1 : -1;   // 默认选最近的一个
+            // 默认选**最老**的节点（索引 0）：与 DeathInterceptor 的默认回溯目标一致，
+            // 保证"预览画面 / 按钮秒数 / 实际回溯目标"三者指向同一个锚点。
+            _selectedIndex = _candidates.Count > 0 ? 0 : -1;
 
             CreateRewindButton(continueBtn, rewindLabel);
             CreateHintText(continueBtn);

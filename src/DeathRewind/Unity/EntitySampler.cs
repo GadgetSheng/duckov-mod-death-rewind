@@ -108,6 +108,11 @@ namespace DeathRewind.Unity
         {
             if (health == null || health.IsMainCharacterHealth) return;
             if (_enemyIds.ContainsKey(health)) return;
+            var character = CharacterOf(health);
+            // 只有"角色"才是敌人。可破坏物（爆炸桶、木箱、障碍）同样带 Health 组件，
+            // 但它们不是敌人：炸毁后必须保持炸毁状态，绝不能进入锚点差量表被回退"复活"
+            //（玩家看到桶凭空复原）。判据：有角色，或有 AI 控制器。
+            if (!EnemyPolicy.IsEnemy(character != null, ai != null)) return;
             string id = "enemy:" + (++_enemySeq);
             _enemyIds[health] = id;
             _enemyObjects[health.gameObject] = id;
@@ -117,7 +122,6 @@ namespace DeathRewind.Unity
             if (receiver != null) _receiverIds[receiver] = id;
             // 记录敌人的 CharacterItem：敌人死亡时游戏会把装备丢进尸体箱，
             // 复活后就没装备了。这里登记后由 EnemyLootboxPatch 阻止那次丢弃。
-            var character = CharacterOf(health);
             if (character != null)
             {
                 if (character.CharacterItem != null) _enemyItems.Add(character.CharacterItem);

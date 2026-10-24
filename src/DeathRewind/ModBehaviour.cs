@@ -66,7 +66,7 @@ namespace DeathRewind
             if (!_config.Enabled) { ModLog.Log("[DeathRewind] disabled by config"); return; }
 
             _clock = new RewindClock();
-            _ring = new AnchorRing(_config.AnchorCount, _config.MinRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            _ring = new AnchorRing(_config.AnchorCount, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
             // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
@@ -130,7 +130,8 @@ namespace DeathRewind
                 new[] { "仅自身状态（推荐）", "完整世界回滚（重）" }, _config.RewindScope);
             ModConfigBridge.AddSlider("anchorInterval", "锚点间隔（秒）", typeof(float), (float)_config.AnchorInterval, new Vector2(1f, 30f));
             ModConfigBridge.AddSlider("anchorCount", "锚点数量（窗口=数量×间隔）", typeof(int), _config.AnchorCount, new Vector2(4f, 64f));
-            ModConfigBridge.AddSlider("minRewindAge", "最短回溯年龄（秒）", typeof(float), (float)_config.MinRewindAge, new Vector2(0f, 120f));
+            ModConfigBridge.AddSlider("maxRewindAge", "最远回溯（秒）", typeof(float), (float)_config.MaxRewindAge, new Vector2(10f, 120f));
+            ModConfigBridge.AddSlider("timelineStep", "时间轴间隔（秒）", typeof(float), (float)_config.TimelineStep, new Vector2(1f, 60f));
             ModConfigBridge.AddSlider("sampleInterval", "采样间隔（秒）", typeof(float), (float)_config.SampleInterval, new Vector2(0.05f, 1f));
             ModConfigBridge.AddBool("autoRewind", "死亡后自动回溯（无人值守测试）", _config.AutoRewind);
             ModConfigBridge.AddBool("debugMode", "调试模式", _config.DebugMode);
@@ -142,9 +143,9 @@ namespace DeathRewind
         {
             if (key == null || !key.StartsWith(ModConfigBridge.Prefixed(""))) return;
             _config.ReloadFromModConfig();
-            _ring?.Reconfigure(_config.AnchorCount, _config.MinRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            _ring?.Reconfigure(_config.AnchorCount, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
             ModLog.Log($"[DeathRewind] 游戏内设置变更生效: {key} " +
-                      $"(interval={_config.AnchorInterval:0.#}s count={_config.AnchorCount} minAge={_config.MinRewindAge:0.#}s scope={_config.RewindScope})");
+                      $"(interval={_config.AnchorInterval:0.#}s count={_config.AnchorCount} maxAge={_config.MaxRewindAge:0.#}s step={_config.TimelineStep:0.#}s scope={_config.RewindScope})");
         }
 
         protected override void OnBeforeDeactivate()

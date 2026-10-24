@@ -115,8 +115,9 @@ namespace DeathRewind.Harmony
 
         /// <summary>
         /// 结算界面的回溯候选节点（最多 <see cref="MaxTimelineNodes"/> 个，旧→新）：
-        /// 优先取当前场景内年龄达标的锚点（默认配置下正好覆盖 ~60s 窗口的 4 个节点）；
-        /// 没有时回退到"进入该场景那一刻"的起点锚点（进图不足窗口长度 / 刚进楼层地道就死）。
+        /// 从最老（maxRewindAge，默认 60s）向内按 timelineStep（默认 10s）取点，
+        /// 即约 60 / 50 / 40 / 30 四个选项；每个目标取年龄最接近的锚点。
+        /// 一个都匹配不到（场景太新，没有够老的锚点）时回退到"进入该场景那一刻"的起点锚点。
         /// </summary>
         private static List<RewindCandidate> BuildCandidates(AnchorRing ring)
         {
@@ -125,7 +126,7 @@ namespace DeathRewind.Harmony
             if (owner == null) return list;
             string sceneKey = LevelAccess.CurrentSceneKey;
 
-            var targets = ring.SelectTargets(sceneKey, MaxTimelineNodes);
+            var targets = ring.SelectByAge(sceneKey, _config.MaxRewindAge, _config.TimelineStep, MaxTimelineNodes);
             if (targets.Count > 0)
             {
                 foreach (var a in targets)
@@ -141,11 +142,11 @@ namespace DeathRewind.Harmony
             // 刚进该场景就死（起点锚点年龄 <2s）→ 回溯等于原地复活，无意义，按无锚点处理
             if (start == null || owner.CurrentTick - start.AbsTimestamp < 2)
             {
-                ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点且起点锚点不可用");
+                ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无回溯窗口内锚点且起点锚点不可用");
                 return list;
             }
             list.Add(new RewindCandidate(start, owner.CurrentTick - start.AbsTimestamp));
-            ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无年龄达标锚点，回溯目标取起点锚点 id={start.Id}");
+            ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无回溯窗口内锚点，回溯目标取起点锚点 id={start.Id}");
             return list;
         }
 
@@ -177,15 +178,17 @@ namespace DeathRewind.Harmony
                 return true;
             }
 
-            // 候选节点（含起点锚点回退：进图不足 minRewindAge 时回到进图那一刻）。
-            // 不能用 ring.CanRewind() 做门槛：它只认年龄达标的锚点，进图 60s 内会误判"无合格锚点"。
+            // 候选节点（含起点锚点回退：场景太新、窗口内没有匹配节点时回到进图那一刻）。
+            // 不用 ring.CanRewind() 做门槛：它只看"窗口内有没有锚点"，进图 60s 内会误判"无合格锚点"。
             var candidates = BuildCandidates(ring);
             if (candidates.Count == 0)
             {
                 ModLog.Log("[DeathRewind] no eligible anchor");
                 return true;
             }
-            var anchor = candidates[candidates.Count - 1].Anchor;   // 默认选最近的一个节点
+            // 默认选最老的节点（≈maxRewindAge，默认 60s）：与"回到约 60 秒前的自己"的承诺一致，
+            // 时间轴上更近的 50/40/30 秒节点由玩家自行点选。
+            var anchor = candidates[0].Anchor;
 
             _interceptionActive = true;
             _capturedDamage = __0;

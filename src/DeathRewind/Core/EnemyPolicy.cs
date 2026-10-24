@@ -26,5 +26,14 @@ namespace DeathRewind.Core
         /// </summary>
         public static bool CanRemoveLateSpawned(bool isBossCharacter)
             => !isBossCharacter;
+
+        /// <summary>
+        /// 该 Health 是否算"敌人"（可进入锚点差量表、随回退一起还原的实体）。
+        /// 可破坏物（爆炸桶、木箱、障碍）同样带 Health 组件，但它们不是角色：
+        /// 被炸毁后必须保持炸毁状态，绝不能被回退"复活"（玩家会看到桶凭空复原）。
+        /// 判据：有角色（CharacterMainControl）或有 AI 控制器。
+        /// </summary>
+        public static bool IsEnemy(bool hasCharacter, bool hasAiController)
+            => hasCharacter || hasAiController;
     }
 }

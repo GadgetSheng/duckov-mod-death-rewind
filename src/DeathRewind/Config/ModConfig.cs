@@ -11,9 +11,12 @@ namespace DeathRewind.Config
         public bool Enabled = true;
         /// <summary>锚点间隔（秒）。position 模式锚点纯内存且轻量，默认 5s 一记，可回溯到约 60s 前的状态。</summary>
         public double AnchorInterval = 5;
-        /// <summary>锚点环容量。默认 16 个 × 5s = 80s 覆盖窗口（minRewindAge=60 需要落在窗口内）。</summary>
+        /// <summary>锚点环容量。默认 16 个 × 5s = 80s 覆盖窗口（maxRewindAge=60 需要落在窗口内）。</summary>
         public int AnchorCount = 16;
-        public double MinRewindAge = 60;
+        /// <summary>回溯窗口上限（秒）：最远能回溯到多久之前。默认 60，时间轴最老的节点即此年龄。</summary>
+        public double MaxRewindAge = 60;
+        /// <summary>时间轴节点间隔（秒）：从最老节点向内按此步长取点。默认 10 → 60/50/40/30 四个节点。</summary>
+        public double TimelineStep = 10;
         /// <summary>设计约束：每关只能复活回溯一次。固定为 1，不可通过 config.txt / 游戏内设置修改。</summary>
         public int MaxRewinds = 1;
         public double SampleInterval = 0.25;
@@ -60,7 +63,8 @@ namespace DeathRewind.Config
                 cfg.Enabled = GetBool(raw, "enabled", cfg.Enabled);
                 cfg.AnchorInterval = GetDouble(raw, "anchorInterval", cfg.AnchorInterval);
                 cfg.AnchorCount = GetInt(raw, "anchorCount", cfg.AnchorCount);
-                cfg.MinRewindAge = GetDouble(raw, "minRewindAge", cfg.MinRewindAge);
+                cfg.MaxRewindAge = GetDouble(raw, "maxRewindAge", cfg.MaxRewindAge);
+                cfg.TimelineStep = GetDouble(raw, "timelineStep", cfg.TimelineStep);
                 cfg.SampleInterval = GetDouble(raw, "sampleInterval", cfg.SampleInterval);
                 cfg.AutoRewind = GetBool(raw, "autoRewind", cfg.AutoRewind);
                 cfg.RewindHotkey = GetString(raw, "rewindHotkey", cfg.RewindHotkey);
@@ -86,7 +90,8 @@ namespace DeathRewind.Config
             cfg.Enabled = ModConfigBridge.Load("enabled", cfg.Enabled);
             cfg.AnchorInterval = ModConfigBridge.Load("anchorInterval", (float)cfg.AnchorInterval);
             cfg.AnchorCount = ModConfigBridge.Load("anchorCount", cfg.AnchorCount);
-            cfg.MinRewindAge = ModConfigBridge.Load("minRewindAge", (float)cfg.MinRewindAge);
+            cfg.MaxRewindAge = ModConfigBridge.Load("maxRewindAge", (float)cfg.MaxRewindAge);
+            cfg.TimelineStep = ModConfigBridge.Load("timelineStep", (float)cfg.TimelineStep);
             cfg.SampleInterval = ModConfigBridge.Load("sampleInterval", (float)cfg.SampleInterval);
             cfg.RewindScope = ModConfigBridge.Load("rewindScope", cfg.RewindScope);
             cfg.AutoRewind = ModConfigBridge.Load("autoRewind", cfg.AutoRewind);
@@ -118,10 +123,22 @@ namespace DeathRewind.Config
             {
                 RewindScope = RewindScope.ToLowerInvariant();
             }
-            if (MinRewindAge > AnchorCount * AnchorInterval)
+            if (MaxRewindAge <= 0) { ModLog.LogWarning("[DeathRewind] maxRewindAge 非法，回落 60"); MaxRewindAge = 60; }
+            if (TimelineStep <= 0) { ModLog.LogWarning("[DeathRewind] timelineStep 非法，回落 10"); TimelineStep = 10; }
+            if (MaxRewindAge > AnchorCount * AnchorInterval)
             {
-                ModLog.LogWarning($"[DeathRewind] minRewindAge({MinRewindAge}) > anchorCount*anchorInterval({AnchorCount * AnchorInterval})，回退将永远不可用，回落");
-                MinRewindAge = AnchorCount * AnchorInterval;
+                // 锚点环覆盖不到那么久远 → 最老节点永远匹配不到，回退不可用
+                ModLog.LogWarning($"[DeathRewind] maxRewindAge({MaxRewindAge}) > anchorCount*anchorInterval({AnchorCount * AnchorInterval})，回退将永远不可用，回落");
+                MaxRewindAge = AnchorCount * AnchorInterval;
+            }
+            // 4 个节点要落在 (0, maxRewindAge] 内：step 过大时收窄，保证 60/50/40/30 这类分布成立
+            const int timelineNodes = 4;
+            if (TimelineStep * (timelineNodes - 1) >= MaxRewindAge)
+            {
+                double narrowed = MaxRewindAge / timelineNodes;
+                if (narrowed < 1) narrowed = 1;
+                ModLog.LogWarning($"[DeathRewind] timelineStep({TimelineStep}) 相对 maxRewindAge({MaxRewindAge}) 过大，收窄为 {narrowed:0.##}");
+                TimelineStep = narrowed;
             }
         }
 
