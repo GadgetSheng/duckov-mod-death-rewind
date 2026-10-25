@@ -170,9 +170,9 @@ namespace DeathRewind
         /// 锚点缩略图：在锚点构建的**同一帧**直接抓屏。
         /// 与锚点状态（0.25s 采样的玩家位姿）的时间差 ≤ 一帧，保证"图示位置 = 回溯位置"；
         /// 早期用独立 5s 循环缓存画面，与锚点网格不同步，最多漂移一个锚点间隔。
-        /// CaptureScreenshotAsTexture 读的是上一渲染帧（≈30ms 前），成本数毫秒、每 5s 一次可接受。
+        /// 抓屏改为相机直渲 192×108 RT（省掉全屏回读），PNG 编码在后台线程，主线程尖峰压到数毫秒内。
         /// </summary>
-        private byte[] CaptureAnchorThumbnail() => ThumbnailCapture.Capture();
+        private System.Threading.Tasks.Task<byte[]> CaptureAnchorThumbnail() => ThumbnailCapture.CaptureAsync();
 
         /// <summary>
         /// 跟踪玩家坐标是否稳定：位移超过 StableRadius 就重新计时，连续 StableWindow 秒不动才算稳定。

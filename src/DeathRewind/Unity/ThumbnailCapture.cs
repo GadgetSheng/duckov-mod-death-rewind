@@ -1,62 +1,69 @@
 using System;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace DeathRewind.Unity
 {
     /// <summary>
-    /// 锚点缩略图抓取：抓取当前屏幕画面 → 缩放到小尺寸 → 编码为 PNG 字节。
-    /// 只在构建锚点时调用一次（主线程），回退确认界面按需解码显示。
+    /// 锚点缩略图抓取：把主相机直接渲染到小尺寸 RT（192×108），再读像素编码为 PNG。
+    /// 与旧的 ScreenCapture.CaptureScreenshotAsTexture 相比，省掉了"全屏纹理分配 + 全屏回读 + 缩放"的开销，
+    /// 主线程只剩 192×108 的 ReadPixels；PNG 编码可放到后台线程（CaptureAsync）。
     /// </summary>
     public static class ThumbnailCapture
     {
         public const int DefaultWidth = 192;
         public const int DefaultHeight = 108;
 
-        /// <summary>抓取缩略图；任何异常都返回 null（不影响锚点构建）。</summary>
+        /// <summary>同步抓取缩略图；任何异常都返回 null（不影响锚点构建）。</summary>
         public static byte[] Capture(int width = DefaultWidth, int height = DefaultHeight)
+        {
+            return CaptureAsync(width, height).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// 异步抓取：主线程完成相机渲染 + ReadPixels，PNG 编码在后台线程进行。
+        /// 调用方必须在主线程调用（相机渲染与 ReadPixels 不可跨线程）。
+        /// </summary>
+        public static Task<byte[]> CaptureAsync(int width = DefaultWidth, int height = DefaultHeight)
         {
             try
             {
-                if (LevelAccess.MainCamera == null) return null;
-                var full = ScreenCapture.CaptureScreenshotAsTexture();
-                if (full == null) return null;
+                var cam = LevelAccess.MainCamera;
+                if (cam == null) return Task.FromResult<byte[]>(null);
+
+                var rt = RenderTexture.GetTemporary(width, height, 16, RenderTextureFormat.ARGB32);
+                var prevActive = RenderTexture.active;
+                var prevTarget = cam.targetTexture;
+                Texture2D tex = null;
                 try
                 {
-                    var small = new Texture2D(width, height, TextureFormat.RGB24, false);
-                    try
-                    {
-                        // GPU 完成中心裁剪 + 缩放：Blit 的 scale/offset 指定源纹理上 16:9 的中心窗口，
-                        // 目标 RT 就是缩略图尺寸 → ReadPixels 只读 width×height 像素（1:1 整块拷贝）
-                        float srcW = full.width, srcH = full.height;
-                        float cropW = srcW, cropH = srcW * height / width;
-                        if (cropH > srcH) { cropH = srcH; cropW = srcH * width / height; }
-                        var scale = new Vector2(cropW / srcW, cropH / srcH);
-                        var offset = new Vector2((srcW - cropW) / (2f * srcW), (srcH - cropH) / (2f * srcH));
+                    cam.targetTexture = rt;
+                    cam.Render();
+                    RenderTexture.active = rt;
 
-                        var prevActive = RenderTexture.active;
-                        var rt = RenderTexture.GetTemporary(width, height, 0);
-                        Graphics.Blit(full, rt, scale, offset);
-                        RenderTexture.active = rt;
-                        small.ReadPixels(new Rect(0, 0, width, height), 0, 0);
-                        small.Apply(false);
-                        RenderTexture.active = prevActive;
-                        RenderTexture.ReleaseTemporary(rt);
-                        return small.EncodeToPNG();
-                    }
-                    finally
-                    {
-                        UnityEngine.Object.Destroy(small);
-                    }
+                    tex = new Texture2D(width, height, TextureFormat.RGB24, false);
+                    tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                    tex.Apply(false);
                 }
                 finally
                 {
-                    UnityEngine.Object.Destroy(full);
+                    cam.targetTexture = prevTarget;
+                    RenderTexture.active = prevActive;
+                    RenderTexture.ReleaseTemporary(rt);
                 }
+
+                // PNG 编码（纯计算，不碰 Unity 渲染）放到后台线程，进一步压缩主线程尖峰
+                var captured = tex;
+                return Task.Run(() =>
+                {
+                    try { return ImageConversion.EncodeToPNG(captured); }
+                    finally { UnityEngine.Object.Destroy(captured); }
+                });
             }
             catch (Exception e)
             {
                 ModLog.LogWarning($"[DeathRewind] 缩略图抓取失败: {e.Message}");
-                return null;
+                return Task.FromResult<byte[]>(null);
             }
         }
     }

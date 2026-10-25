@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using DeathRewind.Core;
 
 namespace DeathRewind.Unity
@@ -30,6 +31,9 @@ namespace DeathRewind.Unity
 
         /// <summary>后台 IO 任务（纯文件操作，不触碰任何 Unity / 游戏 API）。</summary>
         public System.Threading.Tasks.Task<bool> IoTask;
+
+        /// <summary>缩略图 PNG 编码任务（后台线程）；完成后写回 Anchor.PreviewPng。</summary>
+        public Task<byte[]> PreviewTask;
 
         /// <summary>采集累计耗时（毫秒）。</summary>
         public long CaptureMs;

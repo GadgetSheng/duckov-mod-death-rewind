@@ -29,8 +29,8 @@ namespace DeathRewind.Unity
         private readonly AnchorRing _ring;
         private readonly EntitySampler _sampler;
 
-        /// <summary>缩略图来源（端帧定期抓取的缓存画面）；为 null 时锚点不带预览图。</summary>
-        private readonly Func<byte[]> _thumbnailProvider;
+        /// <summary>缩略图来源（相机直渲小 RT，PNG 在后台线程编码）；为 null 时锚点不带预览图。</summary>
+        private readonly Func<System.Threading.Tasks.Task<byte[]>> _thumbnailProvider;
 
         /// <summary>上次采集时各容器的内容指纹（用于跳过未变化容器的重复序列化）。</summary>
         private readonly Dictionary<string, int> _lastFingerprints = new Dictionary<string, int>();
@@ -39,7 +39,7 @@ namespace DeathRewind.Unity
         private readonly Dictionary<string, byte[]> _lastPayloads = new Dictionary<string, byte[]>();
 
         public AnchorBuilder(Config.ModConfig config, LiveStateStore store, AnchorRing ring, EntitySampler sampler = null,
-            Func<byte[]> thumbnailProvider = null)
+            Func<System.Threading.Tasks.Task<byte[]>> thumbnailProvider = null)
         {
             _config = config;
             _store = store;
@@ -79,8 +79,9 @@ namespace DeathRewind.Unity
                 Player = _store.GetPlayer()?.Clone(),
                 World = new WorldState { TimeOfDay = WorldTime() },
             };
-            // 缩略图：取端帧定期抓取的缓存画面（不在构建路径上做全屏截图；失败不影响锚点本身）
-            anchor.PreviewPng = _thumbnailProvider?.Invoke();
+            // 缩略图：相机直渲 192×108 RT + 后台线程 PNG 编码（不在构建路径上做全屏截图回读）。
+            // PNG 任务挂在 ctx.PreviewTask 上，CompleteBuild 时再取回结果，避免阻塞构建流水线。
+            ctx.PreviewTask = _thumbnailProvider?.Invoke();
 
             // 玩家装备槽载荷：CharacterItem 的槽位（护甲/头盔/手持武器等）不在背包 Inventory 里，
             // 背包载荷覆盖不到，必须单独采集（只在锚点构建时做一次，逐 tick 采集太贵）。
@@ -265,6 +266,12 @@ namespace DeathRewind.Unity
                 return null;
             }
             if (IsFullScope()) VerifyPlayerPayload(ctx.Anchor);   // position 模式不还原背包，跳过昂贵的往返自检
+            // 取回后台编码的缩略图；PNG 编码比文件 IO 快得多，到这里通常早已完成
+            if (ctx.PreviewTask != null)
+            {
+                try { ctx.Anchor.PreviewPng = ctx.PreviewTask.GetAwaiter().GetResult(); }
+                catch (Exception e) { ModLog.LogWarning($"[DeathRewind] 缩略图编码失败: {e.Message}"); }
+            }
             ModLog.Log($"[DeathRewind] 锚点 {ctx.Id} 构建完成: 主线程采集 {ctx.CaptureMs}ms（{ctx.ContainerKeys.Count} 个容器）/ 后台 IO {ctx.IoMs}ms / 合计 {ctx.CaptureMs + ctx.IoMs}ms");
             return ctx.Anchor;
         }
