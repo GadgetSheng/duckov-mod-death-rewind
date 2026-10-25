@@ -15,11 +15,19 @@ namespace DeathRewind.Core
         /// <summary>锚点时刻的缩略图（PNG 字节，可能为空）。</summary>
         public byte[] PreviewPng;
 
+        /// <summary>该节点所属空间的场景标识（Unity 场景名 == 游戏 sceneID）。</summary>
+        public string SpaceKey;
+
+        /// <summary>该节点所属空间的显示名（如"神秘山洞"）；结算界面标注用。</summary>
+        public string SpaceLabel;
+
         public RewindCandidate(Anchor anchor, double ageSeconds)
         {
             Anchor = anchor;
             AgeSeconds = ageSeconds;
             PreviewPng = anchor != null ? anchor.PreviewPng : null;
+            SpaceKey = anchor?.SceneKey;
+            SpaceLabel = SpaceKey;
         }
     }
 }

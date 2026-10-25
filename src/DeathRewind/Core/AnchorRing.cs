@@ -13,7 +13,10 @@ namespace DeathRewind.Core
     public sealed class AnchorRing
     {
         private readonly List<Anchor> _anchors = new List<Anchor>();
-        private int _capacity;
+        /// <summary>每个空间的锚点配额（切空间不再互相挤掉）。</summary>
+        private int _capacityPerScene;
+        /// <summary>全局锚点上限（所有空间合计）。</summary>
+        private int _capacityTotal;
         private double _maxAge;
         private int _maxRewinds;
         private double _gridInterval;
@@ -24,9 +27,12 @@ namespace DeathRewind.Core
         private double _currentTick;
         private int _nextId = 1;
 
-        public AnchorRing(int capacity, double maxAge, int maxRewinds, double gridInterval)
+        /// <param name="capacityPerScene">每个空间的锚点配额（≥1）。</param>
+        /// <param name="capacityTotal">全局锚点上限（≥ 每空间配额）。</param>
+        public AnchorRing(int capacityPerScene, int capacityTotal, double maxAge, int maxRewinds, double gridInterval)
         {
-            _capacity = capacity;
+            _capacityPerScene = capacityPerScene < 1 ? 1 : capacityPerScene;
+            _capacityTotal = capacityTotal < _capacityPerScene ? _capacityPerScene : capacityTotal;
             _maxAge = maxAge;
             _maxRewinds = maxRewinds;
             _gridInterval = gridInterval;
@@ -43,9 +49,10 @@ namespace DeathRewind.Core
         /// 运行时更新环参数（游戏内设置变更时调用）：保留已存锚点，仅调整容量/窗口上限/网格间隔，
         /// 并把下一条网格边界重置为"当前网格时间 + 新间隔"。
         /// </summary>
-        public void Reconfigure(int capacity, double maxAge, int maxRewinds, double gridInterval)
+        public void Reconfigure(int capacityPerScene, int capacityTotal, double maxAge, int maxRewinds, double gridInterval)
         {
-            _capacity = capacity;
+            _capacityPerScene = capacityPerScene < 1 ? 1 : capacityPerScene;
+            _capacityTotal = capacityTotal < _capacityPerScene ? _capacityPerScene : capacityTotal;
             _maxAge = maxAge;
             _maxRewinds = maxRewinds;
             _gridInterval = gridInterval;
@@ -75,18 +82,44 @@ namespace DeathRewind.Core
         /// <summary>预分配锚点 Id（构建阶段用它命名 anchor_{Id}.es3 / save_{Id}.sav）。</summary>
         public int AllocateId() => _nextId++;
 
-        /// <summary>插入锚点；超出容量时把最老锚点放入 evicted 返回。</summary>
+        /// <summary>
+        /// 插入锚点；淘汰顺序：① 该空间超出**每空间配额** → 淘汰该空间最老的；
+        /// ② 仍超出**全局上限** → 淘汰全局最老的。被淘汰的锚点放入 evicted 返回。
+        /// </summary>
         public Anchor Insert(Anchor anchor, List<Anchor> evicted)
         {
             if (anchor.Id <= 0) anchor.Id = AllocateId();
             else if (anchor.Id >= _nextId) _nextId = anchor.Id + 1;
             _anchors.Add(anchor);
-            while (_anchors.Count > _capacity)
+            EvictSceneOverflow(anchor.SceneKey, evicted);
+            while (_anchors.Count > _capacityTotal)
             {
                 evicted.Add(_anchors[0]);
                 _anchors.RemoveAt(0);
             }
             return anchor;
+        }
+
+        /// <summary>每空间配额淘汰：只淘汰**同一空间**里最老的锚点，其它空间的锚点不受影响。</summary>
+        private void EvictSceneOverflow(string sceneKey, List<Anchor> evicted)
+        {
+            if (string.IsNullOrEmpty(sceneKey)) return;
+            int count = 0;
+            foreach (var a in _anchors)
+                if (string.Equals(a.SceneKey, sceneKey, StringComparison.Ordinal)) count++;
+            while (count > _capacityPerScene)
+            {
+                Anchor oldest = null;
+                foreach (var a in _anchors)
+                {
+                    if (!string.Equals(a.SceneKey, sceneKey, StringComparison.Ordinal)) continue;
+                    if (oldest == null || a.AbsTimestamp < oldest.AbsTimestamp) oldest = a;
+                }
+                if (oldest == null) break;
+                _anchors.Remove(oldest);
+                evicted.Add(oldest);
+                count--;
+            }
         }
 
         /// <summary>
@@ -148,6 +181,66 @@ namespace DeathRewind.Core
             return result;
         }
 
+        /// <summary>
+        /// **跨空间**的时间轴节点选择：在给定的多个空间（同一关卡的空间清单）里按目标年龄配点。
+        /// 规则：
+        /// ① 每个目标年龄优先取**当前空间**内年龄最接近的锚点；
+        /// ② 当前空间没有匹配时，取其它空间里年龄最接近的锚点（因此时间轴上可能出现别的空间的节点）；
+        /// ③ 目标年龄 = maxAge, maxAge-step, …，最多 maxCount 个。
+        ///
+        /// 与 <see cref="SelectByAge"/> 的差别：后者只在一个空间内选。
+        /// </summary>
+        public List<Anchor> SelectByAgeAcrossSpaces(IReadOnlyList<string> sceneKeys, double maxAge, double step,
+                                                    int maxCount, string currentSceneKey)
+        {
+            var result = new List<Anchor>();
+            if (maxCount <= 0 || step <= 0 || maxAge <= 0 || sceneKeys == null) return result;
+
+            var pool = new List<Anchor>();
+            foreach (var key in sceneKeys)
+            {
+                if (string.IsNullOrEmpty(key)) continue;
+                pool.AddRange(SelectWindow(key, maxAge));
+            }
+            if (pool.Count == 0) return result;
+
+            double tolerance = Math.Max(step * 0.5, _gridInterval * 0.5);
+            var used = new HashSet<Anchor>();
+            for (int n = 0; n < maxCount; n++)
+            {
+                double target = maxAge - n * step;
+                if (target <= 0) break;
+                Anchor best = null;
+                double bestDelta = double.MaxValue;
+                // ① 当前空间优先
+                foreach (var a in pool)
+                {
+                    if (used.Contains(a)) continue;
+                    if (!string.Equals(a.SceneKey, currentSceneKey, StringComparison.Ordinal)) continue;
+                    double delta = Math.Abs((CurrentTick - a.AbsTimestamp) - target);
+                    if (delta > tolerance + 1e-9) continue;
+                    if (delta < bestDelta - 1e-9) { bestDelta = delta; best = a; }
+                }
+                // ② 当前空间没有匹配 → 其它空间里最接近的
+                if (best == null)
+                {
+                    foreach (var a in pool)
+                    {
+                        if (used.Contains(a)) continue;
+                        if (string.Equals(a.SceneKey, currentSceneKey, StringComparison.Ordinal)) continue;
+                        double delta = Math.Abs((CurrentTick - a.AbsTimestamp) - target);
+                        if (delta > tolerance + 1e-9) continue;
+                        if (delta < bestDelta - 1e-9) { bestDelta = delta; best = a; }
+                    }
+                }
+                if (best == null) continue;
+                used.Add(best);
+                result.Add(best);
+            }
+            result.Sort((x, y) => x.AbsTimestamp.CompareTo(y.AbsTimestamp));   // 旧 → 新
+            return result;
+        }
+
         /// <summary>是否还有回溯机会：回退次数未用尽，且回溯窗口内存在可用锚点。</summary>
         public bool CanRewind() => RewindCount < _maxRewinds && SelectWindow(null, _maxAge).Count > 0;
 
@@ -168,26 +261,6 @@ namespace DeathRewind.Core
                     _anchors.RemoveAt(i);
                 }
             }
-        }
-
-        /// <summary>
-        /// 移除某个场景的全部锚点：子场景重新加载时调用。
-        /// 同名场景是**全新实例**（世界原点可能随传送点变化），上一轮访问留下的锚点不再有效；
-        /// 留着会被当成"当前场景的合格锚点"选中，把玩家回溯到上一次访问的位置。
-        /// 被移除的锚点放入 removed 返回，返回移除数量。
-        /// </summary>
-        public int RemoveByScene(string sceneKey, List<Anchor> removed)
-        {
-            if (string.IsNullOrEmpty(sceneKey)) return 0;
-            int count = 0;
-            for (int i = _anchors.Count - 1; i >= 0; i--)
-            {
-                if (!string.Equals(_anchors[i].SceneKey, sceneKey, StringComparison.Ordinal)) continue;
-                removed.Add(_anchors[i]);
-                _anchors.RemoveAt(i);
-                count++;
-            }
-            return count;
         }
 
         public void Clear()

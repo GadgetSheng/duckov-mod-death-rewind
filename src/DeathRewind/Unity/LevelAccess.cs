@@ -128,5 +128,76 @@ namespace DeathRewind.Unity
                 catch { return false; }
             }
         }
+
+        /// <summary>
+        /// 当前空间（= 当前 active 场景）的本地化显示名（如"神秘山洞"）；取不到时回落到场景名。
+        /// 场景名与游戏的 sceneID 一致（本地化表：Level_GroundZero_Cave → 神秘山洞）。
+        /// </summary>
+        public static string CurrentSpaceDisplayName => SpaceDisplayNameOf(CurrentSceneKey);
+
+        /// <summary>任意空间的本地化显示名（结算界面标注节点所属空间用）。</summary>
+        public static string SpaceDisplayNameOf(string sceneKey)
+        {
+            if (string.IsNullOrEmpty(sceneKey)) return "";
+            try
+            {
+                var info = SceneInfoCollection.GetSceneInfo(sceneKey);
+                if (info != null && !string.IsNullOrEmpty(info.DisplayName)) return info.DisplayName;
+            }
+            catch { /* 取不到就用场景名 */ }
+            return sceneKey;
+        }
+
+        /// <summary>
+        /// 该空间是否属于**当前关卡**（一张地图 = 一个 MultiSceneCore + 一份空间清单）。
+        /// 换图（零号区 → 仓库区 → 农场镇）后旧空间不在清单里 → 其锚点不可用于回溯。
+        /// 当前所在空间必然属于当前关卡，直接放行。
+        /// </summary>
+        public static bool IsSpaceInCurrentLevel(string sceneKey)
+        {
+            if (string.IsNullOrEmpty(sceneKey)) return false;
+            if (string.Equals(sceneKey, CurrentSceneKey, StringComparison.Ordinal)) return true;
+            try
+            {
+                var core = MultiSceneCore.Instance;
+                if (core == null) return false;
+                foreach (var entry in core.SubScenes)
+                {
+                    if (entry == null) continue;
+                    if (string.Equals(entry.sceneID, sceneKey, StringComparison.Ordinal)) return true;
+                }
+                return false;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 当前关卡的空间清单（场景标识 = 游戏的 sceneID）。
+        /// 用于跨空间回溯：时间轴的候选可以来自本关卡的任意空间。
+        /// </summary>
+        public static List<string> CurrentLevelSpaceKeys
+        {
+            get
+            {
+                var list = new List<string>();
+                try
+                {
+                    var core = MultiSceneCore.Instance;
+                    if (core != null)
+                    {
+                        foreach (var entry in core.SubScenes)
+                        {
+                            if (entry == null) continue;
+                            if (string.IsNullOrEmpty(entry.sceneID)) continue;
+                            if (!list.Contains(entry.sceneID)) list.Add(entry.sceneID);
+                        }
+                    }
+                }
+                catch { /* 取不到就只用当前空间 */ }
+                string current = CurrentSceneKey;
+                if (!string.IsNullOrEmpty(current) && !list.Contains(current)) list.Add(current);
+                return list;
+            }
+        }
     }
 }

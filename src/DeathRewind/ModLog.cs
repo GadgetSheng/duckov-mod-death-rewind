@@ -19,5 +19,12 @@ namespace DeathRewind
         {
             if (USE_DEBUG) UnityEngine.Debug.LogWarning(message);
         }
+
+        /// <summary>
+        /// 决策级日志：**不受 USE_DEBUG 开关影响**，始终输出。
+        /// 用于"为什么没有回溯能力"这类必须能在发布版日志里读到的事件：
+        /// 回溯机会用尽、没有合格锚点、目标空间跨关卡、控件注入失败、回溯结果、跨空间传送。
+        /// </summary>
+        public static void LogImportant(object message) => UnityEngine.Debug.Log(message);
     }
 }

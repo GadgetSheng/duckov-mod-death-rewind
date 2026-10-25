@@ -6,8 +6,17 @@ namespace DeathRewind.Tests
 {
     public class AnchorRingTests
     {
-        private static Anchor Make(double abs, double grid)
-            => new Anchor { AbsTimestamp = abs, GridTimestamp = grid };
+        private static Anchor Make(double abs, double grid, string sceneKey = null)
+            => new Anchor { AbsTimestamp = abs, GridTimestamp = grid, SceneKey = sceneKey };
+
+        /// <summary>统计环内属于某个空间的锚点数。</summary>
+        private static int CountScene(AnchorRing ring, string sceneKey)
+        {
+            int n = 0;
+            foreach (var a in ring.Anchors)
+                if (a.SceneKey == sceneKey) n++;
+            return n;
+        }
 
         /// <summary>造一条从 tickNow 往回每 stepSeconds 一个锚点的网格（年龄 = step 的整数倍）。</summary>
         private static List<Anchor> SeedGrid(AnchorRing ring, string sceneKey, double tickNow, double stepSeconds, int count)
@@ -38,7 +47,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void PollDueGridTimestamp_FiresOncePerInterval()
         {
-            var ring = new AnchorRing(4, 60.0, 3, 60.0);
+            var ring = new AnchorRing(4, 4, 60.0, 3, 60.0);
             ring.ResetGridTo(0.0, 0.0);
             Assert.Null(ring.PollDueGridTimestamp());            // 原点不是边界
             ring.SetTick(60.0);
@@ -51,7 +60,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void AllocateId_IsMonotonic_AndInsertKeepsIt()
         {
-            var ring = new AnchorRing(4, 60.0, 3, 60.0);
+            var ring = new AnchorRing(4, 4, 60.0, 3, 60.0);
             int id = ring.AllocateId();
             var a = new Anchor { Id = id };
             ring.Insert(a, new List<Anchor>());
@@ -62,7 +71,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void Insert_AssignsId_WhenNotPreallocated()
         {
-            var ring = new AnchorRing(4, 60.0, 3, 60.0);
+            var ring = new AnchorRing(4, 4, 60.0, 3, 60.0);
             var a = new Anchor();
             ring.Insert(a, new List<Anchor>());
             Assert.True(a.Id > 0);
@@ -71,7 +80,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void Insert_EvictsOldestBeyondCapacity()
         {
-            var ring = new AnchorRing(2, 60.0, 3, 60.0);
+            var ring = new AnchorRing(2, 2, 60.0, 3, 60.0);
             var evicted = new List<Anchor>();
             ring.Insert(Make(10, 10), evicted);
             ring.Insert(Make(20, 20), evicted);
@@ -84,7 +93,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectWindow_KeepsOnlyAnchorsWithinMaxAge()
         {
-            var ring = new AnchorRing(16, 60.0, 3, 5.0);
+            var ring = new AnchorRing(16, 16, 60.0, 3, 5.0);
             SeedGrid(ring, "Map", 300.0, 10.0, 10);      // 年龄 0/10/20/.../90
             ring.SetTick(300.0);
 
@@ -98,7 +107,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_PicksFourNodesAt60_50_40_30()
         {
-            var ring = new AnchorRing(32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);         // 年龄 0/5/10/.../60
             ring.SetTick(300.0);
 
@@ -113,7 +122,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_PicksClosestAnchorWhenGridIsOffset()
         {
-            var ring = new AnchorRing(32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
             // 网格相对目标年龄错开 2.5s：年龄 57.5/52.5/47.5/42.5/37.5/32.5
             SeedAges(ring, "Map", 300.0, new double[] { 57.5, 52.5, 47.5, 42.5, 37.5, 32.5 });
             ring.SetTick(300.0);
@@ -129,7 +138,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_IgnoresAnchorsOlderThanMaxAge()
         {
-            var ring = new AnchorRing(32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);         // 含年龄 65/70 的老锚点
             ring.SetTick(300.0);
 
@@ -142,7 +151,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_ReturnsEmpty_WhenSceneTooYoung()
         {
-            var ring = new AnchorRing(32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 2);          // 年龄 0/5 —— 远不到 30s
             ring.SetTick(300.0);
 
@@ -152,7 +161,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_FiltersByScene()
         {
-            var ring = new AnchorRing(32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);
             SeedGrid(ring, "Room_A", 300.0, 5.0, 13);
             ring.SetTick(300.0);
@@ -167,7 +176,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_SkipsConsumedAnchors()
         {
-            var ring = new AnchorRing(32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);
             ring.SetTick(300.0);
 
@@ -179,9 +188,54 @@ namespace DeathRewind.Tests
         }
 
         [Fact]
+        public void SelectByAgeAcrossSpaces_PrefersCurrentSpace()
+        {
+            var ring = new AnchorRing(4, 8, 60.0, 3, 5.0);
+            SeedAges(ring, "Map", 300.0, new double[] { 60.0, 50.0, 40.0, 30.0 });
+            SeedAges(ring, "Cave", 300.0, new double[] { 58.0 });
+            ring.SetTick(300.0);
+
+            var nodes = ring.SelectByAgeAcrossSpaces(new[] { "Cave", "Map" }, 60.0, 10.0, 4, "Cave");
+            Assert.Equal(4, nodes.Count);
+            // 目标 60 秒：当前空间(58s)优先于 Map 的 60s
+            Assert.Equal("Cave", nodes[0].SceneKey);
+            Assert.Equal(58.0, 300.0 - nodes[0].AbsTimestamp, 3);   // 当前空间的 58s 节点
+            // 其余目标由 Map 补位
+            Assert.Equal("Map", nodes[1].SceneKey);
+            Assert.Equal("Map", nodes[3].SceneKey);
+        }
+
+        [Fact]
+        public void SelectByAgeAcrossSpaces_FallsBackToOtherSpaces()
+        {
+            var ring = new AnchorRing(4, 8, 60.0, 3, 5.0);
+            SeedAges(ring, "Map", 300.0, new double[] { 60.0, 50.0, 40.0, 30.0 });
+            SeedAges(ring, "Cave", 300.0, new double[] { 8.0 });     // 刚进洞，没有任何目标年龄可用
+            ring.SetTick(300.0);
+
+            var nodes = ring.SelectByAgeAcrossSpaces(new[] { "Cave", "Map" }, 60.0, 10.0, 4, "Cave");
+            Assert.Equal(4, nodes.Count);
+            Assert.All(nodes, a => Assert.Equal("Map", a.SceneKey));
+        }
+
+        [Fact]
+        public void SelectByAgeAcrossSpaces_IgnoresSpacesOutsideLevel()
+        {
+            var ring = new AnchorRing(4, 8, 60.0, 3, 5.0);
+            SeedAges(ring, "Map", 300.0, new double[] { 60.0, 50.0 });
+            SeedAges(ring, "OldLevel", 300.0, new double[] { 40.0, 30.0 });
+            ring.SetTick(300.0);
+
+            // 只把本关卡的空间交给选择器 → 其它关卡的空间不参与
+            var nodes = ring.SelectByAgeAcrossSpaces(new[] { "Map" }, 60.0, 10.0, 4, "Map");
+            Assert.Equal(2, nodes.Count);
+            Assert.All(nodes, a => Assert.Equal("Map", a.SceneKey));
+        }
+
+        [Fact]
         public void CommitRewind_KeepsTargetSelectable_RemovesYounger()
         {
-            var ring = new AnchorRing(16, 60.0, 3, 5.0);
+            var ring = new AnchorRing(16, 16, 60.0, 3, 5.0);
             var evicted = new List<Anchor>();
             var older = Make(200, 200);
             var target = Make(240, 240);
@@ -208,7 +262,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void CanRewind_RespectsMaxRewinds()
         {
-            var ring = new AnchorRing(4, 60.0, 1, 60.0);
+            var ring = new AnchorRing(4, 4, 60.0, 1, 60.0);
             var evicted = new List<Anchor>();
             var a = Make(240, 240);
             ring.Insert(a, evicted);
@@ -218,48 +272,61 @@ namespace DeathRewind.Tests
         }
 
         [Fact]
-        public void RemoveByScene_DropsOnlyThatScene_AndReturnsRemoved()
+        public void Insert_EvictsOnlySameSceneBeyondPerSceneQuota()
         {
-            var ring = new AnchorRing(8, 60.0, 3, 60.0);
-            ring.ResetGridTo(0.0, 0.0);
-            var roomOld = new Anchor { Id = ring.AllocateId(), SceneKey = "Room_A", AbsTimestamp = 10, GridTimestamp = 10 };
-            var map = new Anchor { Id = ring.AllocateId(), SceneKey = "Map", AbsTimestamp = 20, GridTimestamp = 20 };
-            var roomNew = new Anchor { Id = ring.AllocateId(), SceneKey = "Room_A", AbsTimestamp = 30, GridTimestamp = 30 };
-            ring.Insert(roomOld, new List<Anchor>());
-            ring.Insert(map, new List<Anchor>());
-            ring.Insert(roomNew, new List<Anchor>());
+            // 每空间配额 2、全局上限 4：Map 的第 3 个锚点只挤掉 Map 自己的旧锚点
+            var ring = new AnchorRing(2, 4, 60.0, 3, 60.0);
+            var evicted = new List<Anchor>();
+            ring.Insert(Make(10, 10, "Map"), evicted);
+            ring.Insert(Make(20, 20, "Map"), evicted);
+            ring.Insert(Make(30, 30, "Cave"), evicted);
+            ring.Insert(Make(40, 40, "Cave"), evicted);
+            Assert.Empty(evicted);
+            Assert.Equal(4, ring.Anchors.Count);
 
-            var removed = new List<Anchor>();
-            int count = ring.RemoveByScene("Room_A", removed);
-
-            Assert.Equal(2, count);
-            Assert.Equal(2, removed.Count);
-            Assert.Single(ring.Anchors);
-            Assert.Equal("Map", ring.Anchors[0].SceneKey);
-
-            // 旧房间锚点不能再被当成当前场景的回溯目标
-            ring.SetTick(60.0);
-            Assert.Empty(ring.SelectWindow("Room_A", 60.0));
-            Assert.Single(ring.SelectWindow("Map", 60.0));
+            ring.Insert(Make(50, 50, "Map"), evicted);
+            Assert.Single(evicted);
+            Assert.Equal(10.0, evicted[0].AbsTimestamp);        // Map 最老的被淘汰
+            Assert.Equal(4, ring.Anchors.Count);
+            // 另一个空间的锚点不受影响
+            Assert.Equal(2, CountScene(ring, "Cave"));
+            Assert.Equal(2, CountScene(ring, "Map"));
         }
 
         [Fact]
-        public void RemoveByScene_UnknownScene_IsNoop()
+        public void Insert_EvictsOldestGloballyBeyondTotalCapacity()
         {
-            var ring = new AnchorRing(4, 60.0, 3, 60.0);
-            var map = new Anchor { Id = ring.AllocateId(), SceneKey = "Map", AbsTimestamp = 10, GridTimestamp = 10 };
-            ring.Insert(map, new List<Anchor>());
+            // 每空间配额 2、全局上限 2：两个空间各 1 个锚点，共 2 个不淘汰
+            var ring = new AnchorRing(2, 2, 60.0, 3, 60.0);
+            var evicted = new List<Anchor>();
+            ring.Insert(Make(10, 10, "Map"), evicted);
+            ring.Insert(Make(20, 20, "Cave"), evicted);
+            Assert.Empty(evicted);
 
-            var removed = new List<Anchor>();
-            Assert.Equal(0, ring.RemoveByScene("Other", removed));
-            Assert.Empty(removed);
-            Assert.Single(ring.Anchors);
+            ring.Insert(Make(30, 30, "Cave"), evicted);
+            Assert.Single(evicted);
+            Assert.Equal(10.0, evicted[0].AbsTimestamp);        // 全局最老的被淘汰
+            Assert.Equal(2, ring.Anchors.Count);
+        }
+
+        [Fact]
+        public void AnchorsOfDifferentSpacesCoexist()
+        {
+            // 切空间不再丢锚点：两个空间的锚点可以同时留在环里
+            var ring = new AnchorRing(4, 8, 60.0, 3, 60.0);
+            var evicted = new List<Anchor>();
+            ring.Insert(Make(10, 10, "Map"), evicted);
+            ring.Insert(Make(20, 20, "Cave"), evicted);
+            Assert.Empty(evicted);
+            Assert.Equal(2, ring.Anchors.Count);
+            Assert.Equal(1, CountScene(ring, "Map"));
+            Assert.Equal(1, CountScene(ring, "Cave"));
         }
 
         [Fact]
         public void GridOriginReset_KeepsExistingAnchorsSelectable()
         {
-            var ring = new AnchorRing(16, 60.0, 3, 5.0);
+            var ring = new AnchorRing(16, 16, 60.0, 3, 5.0);
             var evicted = new List<Anchor>();
             var a = Make(240, 240);
             ring.Insert(a, evicted);

@@ -54,7 +54,7 @@ src/DeathRewind/
 | `ModLog` | Info/Warning 诊断日志统一出口；`USE_DEBUG=false` 时静默，Error 始终输出 | `USE_DEBUG`、`Log`、`LogWarning` |
 | `ModConfigBridge` | 通过反射接入 ModConfig 工坊框架；缺失时静默降级回 config.txt | `Available`、`AddDropdown`、`AddSlider`、`AddBool`、`AddOptionsChanged`、`Load`、`Prefixed` |
 | `RewindClock` | 有效 tick（冻结期间不计时）、冻结/恢复 | `Tick`、`Freeze`、`Resume`、`IsFrozen`、`CurrentTick` |
-| `AnchorRing` | 网格时间线、Id 分配、入环/淘汰、目标选择（单个/候选列表）、按场景移除、回退计数；纯逻辑 | `PollDueGridTimestamp`、`AllocateId`、`Insert`、`SelectTarget`、`SelectTargets`、`CanRewind`、`CommitRewind`、`RemoveByScene`、`ResetGridTo`、`Clear` |
+| `AnchorRing` | 网格时间线、Id 分配、入环/淘汰（每空间配额 + 全局上限）、目标选择（同空间 / 跨空间）、回退计数；纯逻辑 | `PollDueGridTimestamp`、`AllocateId`、`Insert`、`SelectWindow`、`SelectByAge`、`SelectByAgeAcrossSpaces`、`CanRewind`、`CommitRewind`、`ResetGridTo`、`Clear` |
 | `LiveStateStore` | 实体键 → DTO 的实时状态字典；提供锚点快照/整体替换 | `ReplaceFrom`、`Clear` |
 | `Dto` | 纯 C# 数据模型与 `Anchor` 定义 | `PlayerState`、`EnemyState`、`ContainerState`、`DoorState`、`WorldState`、`DeathSnapshot`、`PreRewindSnapshot`、`Anchor` |
 | `DeathPanelLayout` | 纯函数的回溯控件布局计算 | `RectF`、`DeathPanelLayout.Result` |
@@ -149,9 +149,11 @@ flowchart LR
 | 事件源 | 处理 |
 |---|---|
 | `LevelManager.OnLevelInitialized` | 清空锚点环/实时状态/敌人注册表；重置网格原点；记录 `_mapSceneKey`；进入 0.75s 静置窗口 |
-| `MultiSceneCore.OnSubSceneLoaded` | `RefreshRegistry` + 丢弃该场景的旧锚点与起点锚点（同名子场景重进 = 全新实例，旧坐标失效）；**不清整个锚点环、不重置回退计数**（地道/楼层） |
+| `MultiSceneCore.OnSubSceneLoaded` | `RefreshRegistry`；**保留该空间的旧锚点**（空间切换只换静态几何体，敌人物品/箱子等实体都活在主场景、跨进出存活，坐标由关卡固定 → 旧锚点仍有效）；**不清整个锚点环、不重置回退计数**（地道/楼层） |
 | `SceneManager.sceneUnloaded` | 卸载的是已登记子场景则忽略；否则视为关卡结束 |
 | `RaidUtilities.OnRaidEnd` | 关卡/局结束 → 清理锚点与落盘文件（保留 `save_backup.sav`） |
+
+> 锚点的两种"边界"：**切空间**（子场景加载）→ 锚点全部保留；**换关卡**（`LevelManager.OnLevelInitialized`，如零号区 → 仓库区 → 农场镇）→ 清空全部锚点，并在新关卡起始位置重建起点锚点。跨关卡不回溯。
 
 > 关键判定：`_mapSceneKey` 是 `level started` 时激活的场景（如 `Level_Farm_01`），不是 `MultiSceneCore.MainScene`（壳场景 `Level_Farm_Main` 不在该场景建锚点）。
 
@@ -193,7 +195,10 @@ sequenceDiagram
 
 关键点：
 
-- **目标选择**：时间轴节点 = 从最老（`maxRewindAge`，默认 60s）向内按 `timelineStep`（默认 10s）取的目标年龄（60/50/40/30），每个目标取年龄最接近的锚点（容差 = max(step/2, 网格间隔/2)）；一个都匹配不到时回退到起点锚点（年龄需 ≥ 2s，刚进图就死视为无锚点）。默认回溯目标 = **最老的节点**（≈60s）。
+- **目标选择**：时间轴节点 = 从最老（`maxRewindAge`，默认 60s）向内按 `timelineStep`（默认 10s）取的目标年龄（60/50/40/30），每个目标取年龄最接近的锚点（容差 = max(step/2, 网格间隔/2)）。
+  - **当前空间优先**：当前空间有匹配节点就用当前空间的；没有才用**本关卡其它空间**的锚点补位 → 时间轴上可能出现别的空间的节点（节点标签会补空间名，回溯按钮文案同步）。
+  - 一个都匹配不到时回退到**当前空间最老的锚点**（通常是"进入该空间那一刻"的起点锚点，年龄需 ≥ 2s）。
+  - 默认回溯目标 = **最老的节点**（≈60s）。
 - **跨地图保护**：锚点 `SceneKey` 与当前场景不一致 → 放弃回溯，放行原生死亡。
 - **接受死亡**：设置 `_bypassNext`，下一帧重放 `LevelManager.OnMainCharacterDie`，并用 `_suppressNextClosure` 跳过一次重复结算界面。
 - **复活后守卫**：15s 内每 0.5s 复检 `invincible` / `isDead` / `MultiSceneCore.IsLoading` / `mainDamageReceiver`，发现外部来源翻回即复位。
@@ -270,7 +275,8 @@ sequenceDiagram
 |---|---|---|
 | `enabled` | `true` | Mod 总开关 |
 | `anchorInterval` | `5` | 锚点网格间隔（秒） |
-| `anchorCount` | `16` | 锚点环容量（16×5s ≈ 80s 窗口） |
+| `anchorCount` | `16` | **每空间**锚点配额（16×5s ≈ 80s 窗口，覆盖 60s 回溯目标） |
+| `anchorCapacity` | `32` | 锚点**总**上限（所有空间合计，full 模式每个锚点一份主存档副本 ≈1.3MB，故不宜过大） |
 | `maxRewindAge` | `60` | 回溯窗口上限（秒）：最远能回溯到多久之前，时间轴最老的节点 |
 | `timelineStep` | `10` | 时间轴节点间隔（秒）：从最老节点向内按此步长取点（60/50/40/30） |
 | `sampleInterval` | `0.25` | 实时状态采样间隔 |
@@ -298,7 +304,8 @@ sequenceDiagram
 - **提示文字**：按钮旁“一次机会”提示，使用与界面上方「UGLY」一致的白色手写风格字体。
 - **预览图**：16:9，屏幕左侧垂直居中；右缘不超过「继续」按钮左缘，空间不足时收缩，不越出画布。
 - **回溯时间轴**：缩略图正下方，1~4 个节点。
-  - 节点来源：从最老（`maxRewindAge=60s`）向内按 `timelineStep=10s` 取目标年龄 → **约 60 / 50 / 40 / 30 四个选项**；每个目标取当前场景内年龄最接近的锚点（网格 5s 时偏差 ≤2.5s）。场景太新（没有够老的锚点）时退化为「进入该场景那一刻」的起点锚点（1 个节点）。
+  - 节点来源：从最老（`maxRewindAge=60s`）向内按 `timelineStep=10s` 取目标年龄 → **约 60 / 50 / 40 / 30 四个选项**；每个目标先取**当前空间**内年龄最接近的锚点（网格 5s 时偏差 ≤2.5s），当前空间没有则用**本关卡其它空间**的锚点补位。
+  - **跨空间标注**：时间轴节点标签只标秒数（"60秒前"）；跨空间时回溯按钮文案补空间名（"回溯 60 秒 · 零号区"），文案过长时自动缩小字号。
   - 默认选中**最老**的节点（≈60s），按钮秒数、预览画面、实际回溯目标三者一致；点选其他节点后同步切换。
   - 从左到右 = 从旧到新；每个节点标注「距今多少秒」。
   - 按下 / 拖动 → 指针吸附到最近节点（`TimelineLayout.NearestNode`）。
@@ -359,4 +366,7 @@ bash tools/build.sh
 16. **不得销毁 Mod 没有亲手停用的敌人对象**：游戏 `SetActiveByPlayerDistance` 会在玩家离开 100m 外时把角色根物体 `SetActive(false)`（回来再激活），"停用"不等于"已死"。误销毁会让 Boss（如零号区·矮鸭）永久消失——游戏的刷怪器不会再生成它。销毁资格见 `EnemyPolicy.CanDestroy`。
 17. **回退不得移除 Boss**（`CharacterMainControl.isBossCharacter`）：Boss 是唯一实体，移除即永久丢失；回退只把它留在原地（记入未覆盖清单）。
 18. 敌人的位姿/停用必须作用在**角色根物体**上：Health 组件可能挂在子物体上，写子物体只会把模型拽走，表现为敌人"凭空消失"。
-19. **可破坏物（爆炸桶、木箱、障碍）不是敌人**：它们同样带 `Health` 组件，但炸毁后必须保持炸毁状态——绝不能进入锚点差量表被回退"复活"（玩家会看到桶凭空复原）。判据见 `EnemyPolicy.IsEnemy`：有角色或有 AI 控制器才算敌人。
+19. **切空间不丢锚点，换关卡才清空**：空间切换只替换静态几何体，敌人/箱子等实体活在主场景、跨进出存活且坐标固定 → 子场景的锚点位置与实体引用依然有效；只有换图（`OnLevelInitialized`）才清空全部锚点并在新关卡起点重设锚点，跨关卡不回溯。
+20. **回溯目标只要属于当前关卡即可**：跨**空间**（同一关卡的不同区域）允许，由 `PhaseTransfer` 传送过去；只有跨**关卡**（换地图）才取消回溯。曾经的"目标场景必须等于当前场景"判据会让跨空间候选一律被取消 → 界面表现为"没有回溯能力"。
+21. **跨空间回溯只还原"玩家 + 可还原的世界状态"**：跨空间时用 `MultiSceneCore.LoadAndTeleport(sceneID, 锚点坐标)` 送玩家进目标空间（该接口会黑屏 + 加载子场景，传送前必须恢复 `timeScale`，否则黑屏动画用 scaled 时间会卡住）。目标空间必须是**本关卡**的空间清单内项（换地图=换关卡，不回溯）。
+22. **可破坏物（爆炸桶、木箱、障碍）不是敌人**：它们同样带 `Health` 组件，但炸毁后必须保持炸毁状态——绝不能进入锚点差量表被回退"复活"（玩家会看到桶凭空复原）。判据见 `EnemyPolicy.IsEnemy`：有角色或有 AI 控制器才算敌人。

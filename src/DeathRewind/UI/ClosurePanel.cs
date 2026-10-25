@@ -47,6 +47,8 @@ namespace DeathRewind.UI
         private Texture2D _nodeTex;
         private Sprite _nodeSprite;
         private List<RewindCandidate> _candidates = new List<RewindCandidate>();
+        /// <summary>回溯按钮的原生字号（文案变长时按比例缩小）。</summary>
+        private float _rewindBaseFontSize;
         private int _selectedIndex = -1;
 
         /// <summary>注入的回溯按钮（供外部挂 onClick）。</summary>
@@ -132,14 +134,29 @@ namespace DeathRewind.UI
             _rewindRect.pivot = new Vector2(0.5f, 0.5f);
 
             var tmp = cloneObj.GetComponentInChildren<TextMeshProUGUI>(true);
-            if (tmp != null) tmp.text = rewindLabel;
+            if (tmp != null)
+            {
+                _rewindBaseFontSize = tmp.fontSize;
+                ApplyRewindLabel(tmp, rewindLabel);
+            }
         }
 
-        /// <summary>更新回溯按钮上的文案（选中节点变化时同步秒数）。</summary>
+        /// <summary>更新回溯按钮上的文案（选中节点变化时同步秒数与空间名）。</summary>
         public void SetRewindLabel(string label)
         {
             var tmp = _rewindButton != null ? _rewindButton.GetComponentInChildren<TextMeshProUGUI>(true) : null;
-            if (tmp != null) tmp.text = label;
+            if (tmp != null) ApplyRewindLabel(tmp, label);
+        }
+
+        /// <summary>
+        /// 设置按钮文案：文案过长（跨空间时带空间名）自动缩小字号，避免溢出按钮。
+        /// </summary>
+        private void ApplyRewindLabel(TextMeshProUGUI tmp, string label)
+        {
+            tmp.text = label;
+            if (_rewindBaseFontSize <= 0f) return;
+            int len = label != null ? label.Length : 0;
+            tmp.fontSize = len > 10 ? _rewindBaseFontSize * Mathf.Max(0.6f, 10f / len) : _rewindBaseFontSize;
         }
 
         /// <summary>
@@ -274,7 +291,8 @@ namespace DeathRewind.UI
                 var labelGo = new GameObject("Label", typeof(RectTransform));
                 labelGo.transform.SetParent(_root, false);
                 var tmp = labelGo.AddComponent<TextMeshProUGUI>();
-                tmp.text = $"{_candidates[i].AgeSeconds:0}秒前";
+                string nodeText = NodeLabel(_candidates[i]);
+                tmp.text = nodeText;
                 tmp.color = new Color(1f, 1f, 1f, 0.8f);
                 tmp.fontSize = 18f;
                 tmp.enableWordWrapping = false;
@@ -524,6 +542,9 @@ namespace DeathRewind.UI
             tex.Apply(false);
             return tex;
         }
+
+        /// <summary>节点标签：只标"N秒前"（不标空间名，跨空间信息由回溯按钮文案承担）。</summary>
+        private string NodeLabel(RewindCandidate candidate) => $"{candidate.AgeSeconds:0}秒前";
 
         /// <summary>生成白色圆点贴图（时间轴节点）。</summary>
         private static Texture2D BuildCircleTexture(int size)

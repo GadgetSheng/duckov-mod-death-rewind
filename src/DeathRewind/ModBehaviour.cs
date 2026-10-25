@@ -31,6 +31,13 @@ namespace DeathRewind
         /// <summary>场景切换后的静置窗口（秒）：游戏在 LoadSubScene 返回后才把玩家传送到入口位置，
         /// 期间采集的起点锚点会记到传送前的坐标。场景名变化/加载结束后的这段时间内不建锚点。</summary>
         private const double StartAnchorSettleSeconds = 0.75;
+        /// <summary>玩家坐标稳定判定：连续 StableWindow 秒内位移小于 StableRadius 米才算稳定。</summary>
+        private const double StableWindow = 0.5;
+        private const float StableRadius = 0.5f;
+        private Vector3 _lastPlayerPos;
+        private bool _hasLastPlayerPos;
+        private bool _playerStable;
+        private double _playerStableSince;
         private const double LoadingSettleSeconds = 0.35;
         private double _startAnchorNotBeforeTick;
         private string _lastSceneKey;
@@ -66,7 +73,7 @@ namespace DeathRewind
             if (!_config.Enabled) { ModLog.Log("[DeathRewind] disabled by config"); return; }
 
             _clock = new RewindClock();
-            _ring = new AnchorRing(_config.AnchorCount, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            _ring = new AnchorRing(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
             // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
@@ -129,7 +136,8 @@ namespace DeathRewind
             ModConfigBridge.AddDropdown("rewindScope", "回溯范围", new[] { "position", "full" },
                 new[] { "仅自身状态（推荐）", "完整世界回滚（重）" }, _config.RewindScope);
             ModConfigBridge.AddSlider("anchorInterval", "锚点间隔（秒）", typeof(float), (float)_config.AnchorInterval, new Vector2(1f, 30f));
-            ModConfigBridge.AddSlider("anchorCount", "锚点数量（窗口=数量×间隔）", typeof(int), _config.AnchorCount, new Vector2(4f, 64f));
+            ModConfigBridge.AddSlider("anchorCount", "每空间锚点数量（窗口=数量×间隔）", typeof(int), _config.AnchorCount, new Vector2(4f, 64f));
+            ModConfigBridge.AddSlider("anchorCapacity", "锚点总上限（所有空间）", typeof(int), _config.AnchorCapacity, new Vector2(8f, 128f));
             ModConfigBridge.AddSlider("maxRewindAge", "最远回溯（秒）", typeof(float), (float)_config.MaxRewindAge, new Vector2(10f, 120f));
             ModConfigBridge.AddSlider("timelineStep", "时间轴间隔（秒）", typeof(float), (float)_config.TimelineStep, new Vector2(1f, 60f));
             ModConfigBridge.AddSlider("sampleInterval", "采样间隔（秒）", typeof(float), (float)_config.SampleInterval, new Vector2(0.05f, 1f));
@@ -143,7 +151,7 @@ namespace DeathRewind
         {
             if (key == null || !key.StartsWith(ModConfigBridge.Prefixed(""))) return;
             _config.ReloadFromModConfig();
-            _ring?.Reconfigure(_config.AnchorCount, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            _ring?.Reconfigure(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
             ModLog.Log($"[DeathRewind] 游戏内设置变更生效: {key} " +
                       $"(interval={_config.AnchorInterval:0.#}s count={_config.AnchorCount} maxAge={_config.MaxRewindAge:0.#}s step={_config.TimelineStep:0.#}s scope={_config.RewindScope})");
         }
@@ -166,6 +174,31 @@ namespace DeathRewind
         /// </summary>
         private byte[] CaptureAnchorThumbnail() => ThumbnailCapture.Capture();
 
+        /// <summary>
+        /// 跟踪玩家坐标是否稳定：位移超过 StableRadius 就重新计时，连续 StableWindow 秒不动才算稳定。
+        /// 用于"起点锚点"采集——子场景加载后游戏才把玩家传送到入口，若此时按固定时间窗采锚点，
+        /// 会把"洞外旧坐标"记成起点，回溯时把玩家传送到非法位置。
+        /// </summary>
+        private void UpdatePlayerStability(double now)
+        {
+            var player = _store.GetPlayer();
+            if (player?.Position == null || player.Position.Length < 3)
+            {
+                _playerStable = false;
+                return;
+            }
+            var pos = new Vector3(player.Position[0], player.Position[1], player.Position[2]);
+            if (!_hasLastPlayerPos || (pos - _lastPlayerPos).sqrMagnitude > StableRadius * StableRadius)
+            {
+                _lastPlayerPos = pos;
+                _hasLastPlayerPos = true;
+                _playerStableSince = now;
+                _playerStable = false;
+                return;
+            }
+            _playerStable = now - _playerStableSince >= StableWindow;
+        }
+
         private void Update()
         {
             if (_config == null || !_config.Enabled) return;
@@ -186,7 +219,12 @@ namespace DeathRewind
                 }
 
                 var due = _ring.PollDueGridTimestamp();
+                UpdatePlayerStability(_clock.CurrentTick);
+                // 网格锚点：时间窗已过即可（玩家在动也要记，否则长时间移动会一个锚点都没有）
                 bool settled = _clock.CurrentTick >= _startAnchorNotBeforeTick;
+                // 起点锚点：还要玩家坐标已稳定——子场景加载后游戏才把玩家传送到入口，
+                // 只按时间窗采会把"洞外旧坐标"记成起点锚点（回溯时把玩家传到非法位置）
+                bool startSettled = settled && _playerStable;
                 // 基地（Base）是安全屋，没有回溯场景——不采锚点，省内存/IO
                 bool inBase = LevelAccess.InBaseLevel;
                 // 允许任何稳定停留的场景建锚点（楼层、主层等 additive 游玩层）；
@@ -195,7 +233,7 @@ namespace DeathRewind
                 {
                     _pendingBuild = _builder.BeginBuild(_ring.AllocateId(), _clock.CurrentTick, due.Value);
                 }
-                else if (_pendingBuild == null && !inBase && LevelAccess.LevelReady && settled && !_scenesWithStartAnchor.Contains(sceneKey))
+                else if (_pendingBuild == null && !inBase && LevelAccess.LevelReady && startSettled && !_scenesWithStartAnchor.Contains(sceneKey))
                 {
                     // 当前场景尚无起点锚点时补建：该场景内不足回溯窗口长度时，回退目标就是它
                     _pendingBuild = _builder.BeginBuild(_ring.AllocateId(), _clock.CurrentTick, _levelStartTick ?? _clock.CurrentTick);
@@ -213,6 +251,9 @@ namespace DeathRewind
                 _pendingBuild = null;
                 // 新场景需要重新静置，MultiSceneLoading 仍会继续推这个时间戳
                 _startAnchorNotBeforeTick = Math.Max(_startAnchorNotBeforeTick, _clock.CurrentTick + StartAnchorSettleSeconds);
+                // 场景切换后玩家会被传送到新空间的入口 → 坐标稳定性重新计时
+                _hasLastPlayerPos = false;
+                _playerStable = false;
                 // 首次稳定下来的 active scene 记为"主要游玩场景"（只作日志标识，后续楼层/地道切换不再重设）
                 if (_mapSceneKey == null) _mapSceneKey = sceneKey;
             }
@@ -284,7 +325,10 @@ namespace DeathRewind
             _lastSceneKey = null;
             _levelStartAnchors.Clear();
             _scenesWithStartAnchor.Clear();
-            ModLog.Log($"[DeathRewind] level started: anchors/rewindCount/store reset at tick={_clock.CurrentTick}");
+            // 换关卡：玩家会被送到新地图的出生点 → 坐标稳定性重新计时
+            _hasLastPlayerPos = false;
+            _playerStable = false;
+            ModLog.LogImportant($"[DeathRewind] level started: anchors/rewindCount/store reset at tick={_clock.CurrentTick}");
         }
 
         private void HandleSubSceneLoaded(string sceneName)
@@ -292,36 +336,13 @@ namespace DeathRewind
             // 只刷新注册表，不清锚点环、不归零回退计数（规格 §8.2）
             _sampler.RefreshRegistry();
 
-            // 子场景重新加载 = 全新实例：同名场景的旧锚点属于上一次访问，
-            // 场景世界原点可能随传送点变化，留着会把玩家回溯到上一次访问的位置 → 丢弃
-            DropSceneAnchors(sceneName);
+            // **不丢弃该空间的旧锚点**：空间切换只换静态几何体，敌人物品/箱子等实体都活在主场景里、
+            // 跨进出一直存活，且坐标由关卡固定 → 旧锚点的位置与实体引用依然有效，
+            // 丢弃反而会让"进洞→死亡→回到上一次进洞位置"这种回溯不可能发生。
+            // 只有**换关卡**（换地图）才清空全部锚点（见 HandleLevelStarted）。
 
-            ModLog.Log($"[DeathRewind] subscene loaded: scene={sceneName} anchors={_ring.Anchors.Count} rewindCount={_ring.RewindCount}");
-        }
-
-        /// <summary>
-        /// 丢弃某个场景的全部锚点与起点锚点（子场景重新加载时调用）。
-        /// 该场景下次进入会重建自己的起点锚点，等价于"重新进图"。
-        /// </summary>
-        private void DropSceneAnchors(string sceneName)
-        {
-            if (string.IsNullOrEmpty(sceneName) || _ring == null) return;
-
-            var removed = new List<Anchor>();
-            int count = _ring.RemoveByScene(sceneName, removed);
-            foreach (var old in removed)
-            {
-                _sampler.ReleaseAnchor(old);
-            }
-
-            // 起点锚点可能已不在环里（例如被回溯丢弃），一并清掉，保证下次进入重建
-            if (_levelStartAnchors.Remove(sceneName)) _scenesWithStartAnchor.Remove(sceneName);
-
-            if (count > 0)
-            {
-                _sampler.SetAnchorCoverage(_ring.Anchors);
-                ModLog.Log($"[DeathRewind] 丢弃旧场景锚点: scene={sceneName} count={count} 剩余={_ring.Anchors.Count}");
-            }
+            ModLog.LogImportant($"[DeathRewind] subscene loaded: scene={sceneName} display={LevelAccess.SpaceDisplayNameOf(sceneName)} " +
+                       $"anchors={_ring.Anchors.Count} rewindCount={_ring.RewindCount}");
         }
 
         private void HandleLevelEnded()

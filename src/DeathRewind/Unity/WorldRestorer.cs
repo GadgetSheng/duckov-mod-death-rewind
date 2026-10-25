@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using DeathRewind.Core;
 using Duckov.Buffs;
+using Duckov.Scenes;
 using Duckov.Utilities;
 using ItemStatsSystem;
 using Saves;
@@ -13,7 +14,7 @@ using UnityEngine;
 namespace DeathRewind.Unity
 {
     /// <summary>恢复流程的阶段标识（日志字段与规格 §11.3 对齐）。</summary>
-    public enum RestorePhase { A, B, C, D, E, E2, E3, E4, E5, E6, F }
+    public enum RestorePhase { A, B, T, C, D, E, E2, E3, E4, E5, E6, F }
 
     /// <summary>
     /// 分阶段恢复：阶段 A 校验与准备 → B 元系统存档 → C 容器背包 → D 敌人/门/时间/子弹 →
@@ -85,6 +86,12 @@ namespace DeathRewind.Unity
             if (full)
             {
                 if (!PhaseB(anchor)) { await PhaseFAsync(anchor); return false; }
+            }
+            // 跨空间传送：锚点与当前所在空间不同 → 先把玩家送进锚点所在空间，再做状态还原。
+            // 顺序要求：必须在 PhaseB（覆盖主存档）之后——目标空间重新实例化时才会读到回滚后的存档。
+            if (!await PhaseTransferAsync(anchor)) { await PhaseFAsync(anchor); return false; }
+            if (full)
+            {
                 if (!await PhaseCAsync(anchor)) { await PhaseFAsync(anchor); return false; }
                 if (!await PhaseDAsync(anchor)) { await PhaseFAsync(anchor); return false; }
             }
@@ -291,6 +298,64 @@ namespace DeathRewind.Unity
             try { SavesSystem.SetFile(SavesSystem.CurrentSlot); }
             catch (Exception e) { ModLog.LogWarning($"[DeathRewind] 磁盘回滚后重载存档失败: {e.Message}"); }
             return true;
+        }
+
+        // ------------------------------------------------------------------ 跨空间传送
+
+        /// <summary>
+        /// 跨空间回溯：把玩家送进锚点所属的空间。
+        /// 锚点与当前所在空间不同 → 用游戏现成接口 <c>MultiSceneCore.LoadAndTeleport</c>
+        /// （加载子场景 + 黑屏 + 传送到指定坐标）。
+        ///
+        /// 传送前必须恢复 timeScale：黑屏淡入淡出（FadeGroup）走 scaled deltaTime，
+        /// 冻结状态下会卡住加载流程。
+        /// </summary>
+        private async Task<bool> PhaseTransferAsync(Anchor anchor)
+        {
+            string targetSpace = anchor?.SceneKey;
+            if (string.IsNullOrEmpty(targetSpace)) return true;
+            if (string.Equals(targetSpace, LevelAccess.CurrentSceneKey, StringComparison.Ordinal)) return true;   // 同空间，无需传送
+            if (!LevelAccess.IsSpaceInCurrentLevel(targetSpace))
+            {
+                // 跨关卡（换地图）不回溯：目标空间不在当前关卡的空间清单里
+                Debug.LogError($"[DeathRewind] restore phase=T 失败：目标空间 {targetSpace} 不属于当前关卡");
+                AddUncovered($"space:{targetSpace}:not-in-level");
+                return false;
+            }
+
+            try
+            {
+                var core = MultiSceneCore.Instance;
+                if (core == null) return false;
+                var pos = AnchorPosition(anchor) ?? LevelAccess.MainCharacter?.transform.position ?? Vector3.zero;
+                Time.timeScale = 1f;      // 传送期间不能冻结（黑屏/加载用 scaled 时间）
+                ModLog.Log($"[DeathRewind] 跨空间传送：{LevelAccess.CurrentSceneKey} → {targetSpace}");
+                bool ok = await core.LoadAndTeleport(targetSpace, pos);
+                // 等场景就绪（黑屏 + 加载完成）
+                for (int i = 0; i < 300 && LevelAccess.MultiSceneLoading; i++) await Task.Delay(16);
+                if (!ok)
+                {
+                    Debug.LogError($"[DeathRewind] restore phase=T 失败：无法进入空间 {targetSpace}");
+                    AddUncovered($"space:{targetSpace}:transfer-failed");
+                    return false;
+                }
+                Log(RestorePhase.T, "ok");
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DeathRewind] restore phase=T 失败：{e.Message}");
+                AddUncovered($"space:{targetSpace}:transfer-error");
+                return false;
+            }
+        }
+
+        /// <summary>锚点里记录的玩家位置（世界坐标）。</summary>
+        private static Vector3? AnchorPosition(Anchor anchor)
+        {
+            var p = anchor?.Player?.Position;
+            if (p == null || p.Length < 3) return null;
+            return new Vector3(p[0], p[1], p[2]);
         }
 
         // ------------------------------------------------------------------ 阶段 C

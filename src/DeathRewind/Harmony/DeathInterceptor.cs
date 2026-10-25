@@ -116,8 +116,9 @@ namespace DeathRewind.Harmony
         /// <summary>
         /// 结算界面的回溯候选节点（最多 <see cref="MaxTimelineNodes"/> 个，旧→新）：
         /// 从最老（maxRewindAge，默认 60s）向内按 timelineStep（默认 10s）取点，
-        /// 即约 60 / 50 / 40 / 30 四个选项；每个目标取年龄最接近的锚点。
-        /// 一个都匹配不到（场景太新，没有够老的锚点）时回退到"进入该场景那一刻"的起点锚点。
+        /// 即约 60 / 50 / 40 / 30 四个选项。
+        /// **当前空间优先**，当前空间没有匹配节点时用**本关卡其它空间**的锚点补位（跨空间回溯）。
+        /// 一个都匹配不到（当前空间太新）时回退到该空间最老的锚点（通常是起点锚点）。
         /// </summary>
         private static List<RewindCandidate> BuildCandidates(AnchorRing ring)
         {
@@ -126,28 +127,65 @@ namespace DeathRewind.Harmony
             if (owner == null) return list;
             string sceneKey = LevelAccess.CurrentSceneKey;
 
-            var targets = ring.SelectByAge(sceneKey, _config.MaxRewindAge, _config.TimelineStep, MaxTimelineNodes);
+            // 跨空间候选：当前空间的锚点优先，当前空间不够时用本关卡其它空间的锚点补位。
+            // 环内锚点必然属于当前关卡（换关卡时 HandleLevelStarted 会清空锚点环）。
+            var targets = ring.SelectByAgeAcrossSpaces(LevelAccess.CurrentLevelSpaceKeys,
+                                                        _config.MaxRewindAge, _config.TimelineStep,
+                                                        MaxTimelineNodes, sceneKey);
             if (targets.Count > 0)
             {
                 foreach (var a in targets)
                 {
-                    list.Add(new RewindCandidate(a, owner.CurrentTick - a.AbsTimestamp));
+                    var candidate = new RewindCandidate(a, owner.CurrentTick - a.AbsTimestamp);
+                    candidate.SpaceLabel = LevelAccess.SpaceDisplayNameOf(a.SceneKey);
+                    list.Add(candidate);
                 }
-                ModLog.Log($"[DeathRewind] 场景 {sceneKey} 回溯候选 {list.Count} 个：" +
-                           string.Join(", ", list.ConvertAll(c => $"{c.AgeSeconds:0}s")) + "，默认取最近");
+                ModLog.LogImportant($"[DeathRewind] 场景 {sceneKey} 回溯候选 {list.Count} 个：" +
+                           string.Join(", ", list.ConvertAll(c => $"{c.AgeSeconds:0}s@{c.SpaceLabel}")) + "，默认取最老");
                 return list;
             }
 
+            // 兜底目标：该空间里最老的锚点（通常是"进入该空间那一刻"的起点锚点）。
+            // 起点锚点需要玩家坐标稳定后才采集（玩家一路跑动时可能还没建）→ 再退到环里该空间最老的锚点。
+            // 起点锚点必须落在回溯窗口内：切空间不再丢弃旧锚点，重进同一空间时旧起点锚点可能还在环里，
+            // 年龄超出 maxRewindAge 的不能当兜底目标（否则会回溯到几分钟前的位置）。
             var start = owner.GetLevelStartAnchor(sceneKey);
-            // 刚进该场景就死（起点锚点年龄 <2s）→ 回溯等于原地复活，无意义，按无锚点处理
-            if (start == null || owner.CurrentTick - start.AbsTimestamp < 2)
+            double startAge = start != null ? owner.CurrentTick - start.AbsTimestamp : -1;
+            if (start == null || startAge < 2 || startAge > _config.MaxRewindAge)
             {
-                ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无回溯窗口内锚点且起点锚点不可用");
+                start = null;
+                foreach (var a in ring.SelectWindow(sceneKey, _config.MaxRewindAge))
+                {
+                    if (owner.CurrentTick - a.AbsTimestamp < 2) continue;
+                    start = a;
+                    break;      // SelectWindow 已按旧→新排序，第一个就是最老的
+                }
+                startAge = start != null ? owner.CurrentTick - start.AbsTimestamp : -1;
+            }
+            // 刚进该场景就死（最老锚点年龄 <2s）→ 回溯等于原地复活，无意义，按无锚点处理
+            if (start == null || startAge < 2)
+            {
+                ModLog.LogImportant($"[DeathRewind] 场景 {sceneKey} 内无回溯窗口内锚点且起点锚点不可用（本次不提供回溯）");
                 return list;
             }
-            list.Add(new RewindCandidate(start, owner.CurrentTick - start.AbsTimestamp));
-            ModLog.Log($"[DeathRewind] 场景 {sceneKey} 内无回溯窗口内锚点，回溯目标取起点锚点 id={start.Id}");
+            var fallback = new RewindCandidate(start, owner.CurrentTick - start.AbsTimestamp);
+            fallback.SpaceLabel = LevelAccess.SpaceDisplayNameOf(start.SceneKey);
+            list.Add(fallback);
+            ModLog.LogImportant($"[DeathRewind] 场景 {sceneKey} 内无回溯窗口内锚点，回溯目标取该空间最老锚点 id={start.Id}");
             return list;
+        }
+
+        /// <summary>回溯按钮文案：目标在别的空间时补上空间名（"回溯 60 秒 · 零号区"）。</summary>
+        private static string RewindLabel(RewindCandidate candidate, string currentSceneKey)
+        {
+            string text = $"回溯 {candidate.AgeSeconds:0} 秒";
+            if (candidate.SpaceKey != null
+                && currentSceneKey != null
+                && !string.Equals(candidate.SpaceKey, currentSceneKey, StringComparison.Ordinal))
+            {
+                text += $" · {candidate.SpaceLabel}";
+            }
+            return text;
         }
 
         /// <summary>死亡入口前缀：捕获伤害、判定是否可回溯、冻结时间并驱动结算界面裁决。</summary>
@@ -174,7 +212,7 @@ namespace DeathRewind.Harmony
             if (ring == null) return true;
             if (ring.RewindCount >= _config.MaxRewinds)
             {
-                ModLog.Log("[DeathRewind] rewind limit reached");
+                ModLog.LogImportant("[DeathRewind] 回溯机会已用尽（每关一次），本次不提供回溯");
                 return true;
             }
 
@@ -183,7 +221,7 @@ namespace DeathRewind.Harmony
             var candidates = BuildCandidates(ring);
             if (candidates.Count == 0)
             {
-                ModLog.Log("[DeathRewind] no eligible anchor");
+                ModLog.LogImportant($"[DeathRewind] 无合格锚点，本次不提供回溯（场景={LevelAccess.CurrentSceneKey} 锚点总数={ring.Anchors.Count}）");
                 return true;
             }
             // 默认选最老的节点（≈maxRewindAge，默认 60s）：与"回到约 60 秒前的自己"的承诺一致，
@@ -198,10 +236,12 @@ namespace DeathRewind.Harmony
             _owner.SuppressLevelEnd = true;   // 裁决期间禁止楼层 unload / RaidEnd 清空锚点环
             _pendingAnchor = anchor;
 
-            // 跨地图保护
-            if (!string.IsNullOrEmpty(anchor.SceneKey) && anchor.SceneKey != LevelAccess.CurrentSceneKey)
+            // 跨关卡保护：目标锚点必须属于**当前关卡**（一张地图 = 一份空间清单）。
+            // 跨**空间**（同一关卡的不同区域，如主地图 ↔ 神秘山洞）是允许的 →
+            // 回溯时由 WorldRestorer.PhaseTransfer 用 LoadAndTeleport 把玩家送过去。
+            if (!string.IsNullOrEmpty(anchor.SceneKey) && !LevelAccess.IsSpaceInCurrentLevel(anchor.SceneKey))
             {
-                ModLog.Log($"[DeathRewind] anchor scene mismatch: {anchor.SceneKey} != {LevelAccess.CurrentSceneKey}");
+                ModLog.LogImportant($"[DeathRewind] 目标空间不属于当前关卡，回溯取消: {anchor.SceneKey}");
                 _pendingAnchor = null;
                 CancelPending();
                 return true;
@@ -229,6 +269,7 @@ namespace DeathRewind.Harmony
                                                    List<RewindCandidate> candidates)
         {
             int gen = _choiceGeneration;
+            string currentSpaceKey = LevelAccess.CurrentSceneKey;
 
             // 原生死亡流程在结算前有 2.5 秒定格（ignoreTimeScale），保持同样节奏
             yield return new WaitForSecondsRealtime(2.5f);
@@ -242,7 +283,7 @@ namespace DeathRewind.Harmony
 
             if (view == null || continueBtn == null)
             {
-                ModLog.LogWarning("[DeathRewind] 原生死亡结算界面不可用，降级为内置裁决面板");
+                ModLog.LogImportant("[DeathRewind] 原生死亡结算界面不可用，降级为内置裁决面板");
                 yield return FallbackPromptRoutine(gen, anchor, ageSeconds);
                 yield break;
             }
@@ -266,15 +307,15 @@ namespace DeathRewind.Harmony
 
             // 注入控件组：原生"继续"按钮 + 回溯按钮并排一行，白色提示文字与箭头在回溯按钮上方，
             // 锚点缩略图在按钮行下方（行合并后腾出的竖向空间全部给图片）。
-            // 时间轴：1~4 个候选节点，默认选最近的一个；
+            // 时间轴：1~4 个候选节点，默认选最老的一个（索引 0）；
             // 拖拽切换节点 → 换预览图 + 换回溯目标（selected 随选择变化）
             var selected = anchor;
-            var panel = ClosurePanel.Create(view.transform, continueBtn, $"回溯 {ageSeconds:0} 秒", candidates);
-            ModLog.Log($"[DeathRewind] 回溯控件注入: {(panel != null ? "ok" : "failed")} " +
+            var panel = ClosurePanel.Create(view.transform, continueBtn, RewindLabel(candidates[0], currentSpaceKey), candidates);
+            ModLog.LogImportant($"[DeathRewind] 回溯控件注入: {(panel != null ? "ok" : "failed")} " +
                       $"(view={view != null} contBtn={continueBtn != null} wait={wait:0.0}s preview={(panel != null && panel.HasPreview ? "ok" : "none")} nodes={(panel != null ? panel.CandidateCount : 0)})");
             if (panel == null)
             {
-                ModLog.LogWarning("[DeathRewind] 回溯控件注入失败，只能选择继续（接受死亡）");
+                ModLog.LogImportant("[DeathRewind] 回溯控件注入失败，只能选择继续（接受死亡）");
             }
             else
             {
@@ -284,7 +325,7 @@ namespace DeathRewind.Harmony
                     if (index < 0 || index >= candidates.Count) return;
                     selected = candidates[index].Anchor;
                     _pendingAnchor = selected;
-                    panel.SetRewindLabel($"回溯 {candidates[index].AgeSeconds:0} 秒");
+                    panel.SetRewindLabel(RewindLabel(candidates[index], currentSpaceKey));
                     ModLog.Log($"[DeathRewind] 时间轴选中节点 #{index} age={candidates[index].AgeSeconds:0}s anchorId={selected.Id}");
                 };
                 if (!panel.HasPreview)
@@ -385,13 +426,13 @@ namespace DeathRewind.Harmony
                 _owner.Ring.ResetGridTo(anchor.GridTimestamp, _owner.CurrentTick);
                 foreach (var old in removed) _owner.ReleaseAnchor(old);
                 _owner.ReleaseCommittedDestroy();
-                ModLog.Log($"[DeathRewind] rewind result=ok rewindCount={_owner.Ring.RewindCount} consumedAnchor={anchor.Id}");
+                ModLog.LogImportant($"[DeathRewind] rewind result=ok rewindCount={_owner.Ring.RewindCount} consumedAnchor={anchor.Id}");
                 PostReviveFixup();
                 _owner.StartCoroutine(PostReviveGuard());
             }
             else
             {
-                ModLog.LogWarning($"[DeathRewind] rewind result=failed rewindCount={_owner.Ring.RewindCount}");
+                ModLog.LogImportant($"[DeathRewind] rewind result=failed rewindCount={_owner.Ring.RewindCount}");
                 ScheduleReplay();
             }
 

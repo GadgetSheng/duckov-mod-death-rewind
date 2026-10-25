@@ -11,8 +11,10 @@ namespace DeathRewind.Config
         public bool Enabled = true;
         /// <summary>锚点间隔（秒）。position 模式锚点纯内存且轻量，默认 5s 一记，可回溯到约 60s 前的状态。</summary>
         public double AnchorInterval = 5;
-        /// <summary>锚点环容量。默认 16 个 × 5s = 80s 覆盖窗口（maxRewindAge=60 需要落在窗口内）。</summary>
+        /// <summary>每个空间的锚点配额。默认 16 个 × 5s = 80s 覆盖窗口（maxRewindAge=60 需要落在窗口内）。</summary>
         public int AnchorCount = 16;
+        /// <summary>全局锚点上限（所有空间合计）。默认 32：够放"当前空间 + 1 个其它空间"，避免 full 模式的存档副本爆炸。</summary>
+        public int AnchorCapacity = 32;
         /// <summary>回溯窗口上限（秒）：最远能回溯到多久之前。默认 60，时间轴最老的节点即此年龄。</summary>
         public double MaxRewindAge = 60;
         /// <summary>时间轴节点间隔（秒）：从最老节点向内按此步长取点。默认 10 → 60/50/40/30 四个节点。</summary>
@@ -63,6 +65,7 @@ namespace DeathRewind.Config
                 cfg.Enabled = GetBool(raw, "enabled", cfg.Enabled);
                 cfg.AnchorInterval = GetDouble(raw, "anchorInterval", cfg.AnchorInterval);
                 cfg.AnchorCount = GetInt(raw, "anchorCount", cfg.AnchorCount);
+                cfg.AnchorCapacity = GetInt(raw, "anchorCapacity", cfg.AnchorCapacity);
                 cfg.MaxRewindAge = GetDouble(raw, "maxRewindAge", cfg.MaxRewindAge);
                 cfg.TimelineStep = GetDouble(raw, "timelineStep", cfg.TimelineStep);
                 cfg.SampleInterval = GetDouble(raw, "sampleInterval", cfg.SampleInterval);
@@ -90,6 +93,7 @@ namespace DeathRewind.Config
             cfg.Enabled = ModConfigBridge.Load("enabled", cfg.Enabled);
             cfg.AnchorInterval = ModConfigBridge.Load("anchorInterval", (float)cfg.AnchorInterval);
             cfg.AnchorCount = ModConfigBridge.Load("anchorCount", cfg.AnchorCount);
+            cfg.AnchorCapacity = ModConfigBridge.Load("anchorCapacity", cfg.AnchorCapacity);
             cfg.MaxRewindAge = ModConfigBridge.Load("maxRewindAge", (float)cfg.MaxRewindAge);
             cfg.TimelineStep = ModConfigBridge.Load("timelineStep", (float)cfg.TimelineStep);
             cfg.SampleInterval = ModConfigBridge.Load("sampleInterval", (float)cfg.SampleInterval);
@@ -110,6 +114,11 @@ namespace DeathRewind.Config
         {
             if (AnchorInterval <= 0) { ModLog.LogWarning("[DeathRewind] anchorInterval 非法，回落 5"); AnchorInterval = 5; }
             if (AnchorCount < 2) { ModLog.LogWarning("[DeathRewind] anchorCount 非法，回落 16"); AnchorCount = 16; }
+            if (AnchorCapacity < AnchorCount)
+            {
+                ModLog.LogWarning($"[DeathRewind] anchorCapacity({AnchorCapacity}) < anchorCount({AnchorCount})，回落为 anchorCount");
+                AnchorCapacity = AnchorCount;
+            }
             if (SampleInterval <= 0) { ModLog.LogWarning("[DeathRewind] sampleInterval 非法，回落 0.25"); SampleInterval = 0.25; }
             if (AnchorCaptureBatchSize < 1) { ModLog.LogWarning("[DeathRewind] anchorCaptureBatchSize 非法，回落 2"); AnchorCaptureBatchSize = 2; }
             if (AnchorCaptureBudgetMs <= 0) { ModLog.LogWarning("[DeathRewind] anchorCaptureBudgetMs 非法，回落 2"); AnchorCaptureBudgetMs = 2; }
