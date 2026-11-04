@@ -53,12 +53,18 @@
 - 候选节点仍按 `timelineStep` 从最老向内取 4 个；找不到时回退到该空间最老锚点（判定同样用有效窗口）。
 - 不改 `CommitRewind` 的语义（回退后更年轻的锚点仍被丢弃），历史深度由锚点环保留量决定。
 
-### 2.4 击杀判定
+### 2.4 击杀判定（只算玩家击杀）
 
-- `EntitySampler` 每 0.25s 采样敌人时比较「上次是否存活 → 本次是否死亡」，出现 `存活 → 死亡` 跳变即判定一次击杀；`full` 模式的 `RegisterDeadEnemy` 也走同一判定。
-- 同一敌人只计一次（按稳定 id 去重），敌人被移出注册表时清理去重记录。
-- BOSS 判定沿用 `EntitySampler.IsBossEnemy`（`CharacterMainControl.isBossCharacter`）。
-- **不区分击杀者**：敌人死于环境/队友也算（游戏没有可靠的「被玩家击杀」信号）。
+- **来源**：订阅游戏自带的**静态事件** `Health.OnDead`（`Action<Health, DamageInfo>`）——
+  游戏任务计数（`Duckov.Quests.Tasks.QuestTask_KillCount.Health_OnDead`）用的就是同一个事件，
+  因此判定口径与任务一致。
+- **归属**：`DamageInfo.fromCharacter`（伤害来源角色）的主角色标记为真 → `killer.Health.IsMainCharacterHealth`
+  （等价于任务用的 `CharacterMainControlExtensions.IsMainCharacter`）才算玩家击杀。
+  环境伤害、陷阱、其它角色击杀**不计分**。
+- **过滤**：只有登记在敌人注册表里的 `Health` 才算（玩家自己、可破坏物、宠物等都不在表内）。
+- **去重**：按稳定 id 去重，同一敌人只计一次。
+- **BOSS 判定**：登记时用 `EntitySampler.IsBossEnemy`（`CharacterMainControl.isBossCharacter`）记下。
+- **退订**：`Health.OnDead` 是静态事件，Mod 停用时必须 `UnsubscribeDeathEvents()` 断开。
 
 ## 3. 架构
 
@@ -137,5 +143,5 @@
 2. 上限是「本关可持有的 1UP 总数」，保底 1 次，积分只能往上加。
 3. 冷却从**复活成功**那一刻开始计时，走有效 tick。
 4. 面板的删除线表示**已用掉**的 1UP，`×N UP` 表示还剩几次。
-5. 任何敌人死亡都计分，不区分击杀者。
+5. **只算玩家击杀**：用游戏自带的 `Health.OnDead` 事件 + `DamageInfo.fromCharacter` 判定（与任务系统同源）；环境/爆炸/其它角色击杀不计分。
 6. 第二次之后的回溯用「窗口 × 使用次数」扩展目标深度，不改锚点环容量。

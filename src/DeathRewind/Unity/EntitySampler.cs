@@ -27,8 +27,6 @@ namespace DeathRewind.Unity
         private readonly Dictionary<string, double> _registeredAt = new Dictionary<string, double>();
         private readonly HashSet<string> _anchorCovered = new HashSet<string>();
         private readonly HashSet<string> _deferredDestroy = new HashSet<string>();
-        /// <summary>敌人稳定 ID → 上次采样时是否存活（检测"存活 → 死亡"跳变 = 一次击杀）。</summary>
-        private readonly Dictionary<string, bool> _enemyAlive = new Dictionary<string, bool>();
         /// <summary>敌人稳定 ID → 是否 BOSS（登记时判定：角色被销毁后再问就问不到了）。</summary>
         private readonly Dictionary<string, bool> _enemyBoss = new Dictionary<string, bool>();
         /// <summary>已计入击杀的敌人 ID（同一个敌人只计一次）。</summary>
@@ -42,9 +40,12 @@ namespace DeathRewind.Unity
             _store = store;
             _anchorCount = anchorCount;
             _anchorInterval = anchorInterval;
+            // 订阅全局死亡事件：与游戏任务系统（QuestTask_KillCount）同一套判定方式，
+            // 事件带 DamageInfo → 能判断是不是**玩家**击杀（Health.OnDead 是静态事件）
+            Health.OnDead += HandleEnemyDead;
         }
 
-        /// <summary>敌人被击杀时触发（参数：稳定 ID、是否 BOSS）。用于积分 → 1UP。</summary>
+        /// <summary>敌人被**玩家**击杀时触发（参数：稳定 ID、是否 BOSS）。用于积分 → 1UP。</summary>
         public event System.Action<string, bool> EnemyKilled;
 
         /// <summary>敌人判定（与 EnemyPersistencePatch 共用）。</summary>
@@ -102,22 +103,15 @@ namespace DeathRewind.Unity
                 var health = kv.Key;
                 if (health == null) { RemoveEntry(kv.Value, kv.Key); continue; }
                 var ai = _enemyControllers.TryGetValue(health, out var ctrl) ? ctrl : FindAiController(health);
-                bool alive = !health.IsDead;
                 _store.SetEnemy(kv.Value, new EnemyState
                 {
                     Position = ToArray3(health.transform.position),
                     Rotation = ToArray4(health.transform.rotation),
                     Health = health.CurrentHealth,
-                    Alive = alive,
+                    Alive = !health.IsDead,
                     AiTargetId = ResolveTargetId(ai),
                     Noticed = ai != null && ai.noticed,
                 });
-                // 击杀判定：观察到"存活 → 死亡"的跳变才算一次击杀（同一敌人只计一次）
-                if (_enemyAlive.TryGetValue(kv.Value, out var wasAlive))
-                {
-                    if (wasAlive && !alive) ReportKill(kv.Value);
-                    _enemyAlive[kv.Value] = alive;
-                }
             }
         }
 
@@ -137,7 +131,6 @@ namespace DeathRewind.Unity
             _idToHealth[id] = health;
             _idToObjects[id] = health.gameObject;
             _registeredAt[id] = _now;
-            _enemyAlive[id] = true;                    // 登记时视为存活，之后由采样维护
             _enemyBoss[id] = IsBossEnemy(id);          // BOSS 身份在登记时定下来（角色销毁后问不到）
             if (ai != null) _enemyControllers[health] = ai;
             var receiver = FindDamageReceiver(health);
@@ -236,7 +229,6 @@ namespace DeathRewind.Unity
                 // 死亡持久化补丁已停用角色根物体 → 该尸体由 Mod 接管
                 _modDeactivated.Add(existing);
                 _store.SetEnemy(existing, new EnemyState { Alive = false, Health = 0f });
-                ReportKill(existing);
                 return;
             }
             string id = "enemy:" + (++_enemySeq);
@@ -256,20 +248,49 @@ namespace DeathRewind.Unity
                 Position = ToArray3(health.transform.position),
                 Rotation = ToArray4(health.transform.rotation),
             });
-            ReportKill(id);   // 该敌人确实是死的（此前没见过它活着 → 不会计入）
         }
 
         /// <summary>
-        /// 判定一次击杀并通知订阅者（积分 → 1UP）。
-        /// 只有"我们亲眼见过它活着、现在死了"才算一次击杀；同一个敌人只计一次。
+        /// 敌人死亡事件（<c>Health.OnDead</c>）——**与游戏任务系统同一套判定方式**：
+        /// 任务的击杀计数（<c>QuestTask_KillCount.Health_OnDead</c>）也是订阅这个事件，
+        /// 靠 <c>DamageInfo</c> 判断击杀者、武器、爆头、敌人类型等。
+        /// 这里只取"击杀者是不是主角色"这一条：**只有玩家击杀才计分**。
         /// </summary>
+        private void HandleEnemyDead(Health dead, DamageInfo dmg)
+        {
+            if (dead == null) return;
+            if (!_enemyIds.TryGetValue(dead, out var id)) return;   // 不是我们登记的敌人
+            if (!IsPlayerKill(dmg)) return;                          // 环境/其它角色击杀 → 不计分
+            ReportKill(id);
+        }
+
+        /// <summary>
+        /// 是否玩家击杀：伤害来源是主角色。
+        /// 判据与任务系统一致（<c>CharacterMainControlExtensions.IsMainCharacter</c>），
+        /// 这里用 <c>Health.IsMainCharacterHealth</c>（同一个语义的公开标记）。
+        /// </summary>
+        private static bool IsPlayerKill(DamageInfo dmg)
+        {
+            var killer = dmg.fromCharacter;           // DamageInfo 是结构体，不能判 null
+            if (killer == null) return false;          // 环境伤害 / 陷阱 → 不计
+            try
+            {
+                var killerHealth = killer.Health;
+                return killerHealth != null && killerHealth.IsMainCharacterHealth;
+            }
+            catch (System.Exception e)
+            {
+                ModLog.LogWarning($"[DeathRewind] 击杀归属判定失败: {e.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>记一次玩家击杀并通知订阅者（积分 → 1UP）；同一个敌人只计一次。</summary>
         private void ReportKill(string id)
         {
             if (string.IsNullOrEmpty(id)) return;
             if (_countedKills.Contains(id)) return;
-            if (!_enemyAlive.TryGetValue(id, out var wasAlive) || !wasAlive) return;
             _countedKills.Add(id);
-            _enemyAlive[id] = false;
             bool boss = _enemyBoss.TryGetValue(id, out var isBoss) && isBoss;
             EnemyKilled?.Invoke(id, boss);
         }
@@ -488,7 +509,6 @@ namespace DeathRewind.Unity
                     _enemyObjects.Remove(go);
                 _idToObjects.Remove(id);
                 _modDeactivated.Remove(id);
-                _enemyAlive.Remove(id);
                 _enemyBoss.Remove(id);
                 _countedKills.Remove(id);
             }
@@ -506,9 +526,14 @@ namespace DeathRewind.Unity
             _deferredDestroy.Clear();
             _idToHealth.Clear();
             _idToObjects.Clear();
-            _enemyAlive.Clear();
             _enemyBoss.Clear();
             _countedKills.Clear();
+        }
+
+        /// <summary>退订全局死亡事件（Mod 停用时调用，避免悬挂订阅）。</summary>
+        public void UnsubscribeDeathEvents()
+        {
+            Health.OnDead -= HandleEnemyDead;
         }
 
         /// <summary>子场景加载：剔除已销毁对象的引用，保留其余稳定 ID。</summary>
@@ -539,7 +564,6 @@ namespace DeathRewind.Unity
                 _enemyObjects.Remove(go);
             _idToHealth.Remove(id);
             _idToObjects.Remove(id);
-            _enemyAlive.Remove(id);
             _enemyBoss.Remove(id);
             _countedKills.Remove(id);
             _store?.RemoveEnemy(id);

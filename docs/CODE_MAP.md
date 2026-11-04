@@ -78,7 +78,7 @@ src/DeathRewind/
 | `RewindCooldown` | 复活冷却计时（纯逻辑）：用掉一次复活后开始计时，走有效 tick；**增强模式关闭时不启用** | `Start`、`Remaining`、`IsReady`、`SetDuration`、`Reset` |
 | `LevelHooks` | 订阅关卡/子场景/场景卸载/局结束事件并归一化为三个回调（子场景回调带场景名） | `OnLevelStarted`、`OnSubSceneLoaded(string)`、`OnLevelEnded` |
 | `LevelAccess` | 安全读取游戏静态状态（主角色、相机、容器表、场景键、加载态） | `MainCharacter`、`MainCamera`、`LootBoxInventories`、`CurrentSceneKey`、`LevelReady`、`MultiSceneLoading` |
-| `EntitySampler` | 定期采样玩家/敌人/容器/门；维护敌人稳定 Id、角色根物体与死亡敌人登记；锚点覆盖关系；**只销毁 Mod 自己停用的敌人** | `Sample`、`RegisterDeadEnemy`、`GetEnemyHealth`、`GetEnemyObject`、`GetEnemyRoot`、`IsBossEnemy`、`MarkDeferredDestroy`、`UnregisterFromDistanceStreaming`、`ReleaseAnchor`、`SetAnchorCoverage`、`ResetRegistry`、`RefreshRegistry` |
+| `EntitySampler` | 定期采样玩家/敌人/容器/门；维护敌人稳定 Id、角色根物体与死亡敌人登记；**玩家击杀检测**（`Health.OnDead` + `DamageInfo` 归属判定）；锚点覆盖关系；**只销毁 Mod 自己停用的敌人** | `Sample`、`RegisterDeadEnemy`、`GetEnemyHealth`、`GetEnemyObject`、`GetEnemyRoot`、`IsBossEnemy`、`MarkDeferredDestroy`、`UnregisterFromDistanceStreaming`、`ReleaseAnchor`、`SetAnchorCoverage`、`ResetRegistry`、`RefreshRegistry`、`UnsubscribeDeathEvents` |
 | `AnchorBuilder` | 分帧构建锚点：采集 → 后台 IO 落盘 → 完成校验 | `BeginBuild`、`ContinueCapture`、`StartIo`、`IsIoCompleted`、`CompleteBuild`、`DeleteAllAnchorFiles`、`CleanupOrphanFiles` |
 | `AnchorBuildContext` | 单次锚点构建的分帧采集/异步 IO 状态载体 | `Anchor`、`CaptureDone`、`IoTask` 等 |
 | `WorldRestorer` | 执行差量恢复阶段 A–F，失败时反向补偿 | `RestoreAsync`、`SetDeathContext`、`PhaseA/B/C/D/E/E2/E3/E4/E6/F` |
@@ -354,10 +354,10 @@ sequenceDiagram
 - **得分**：`当前 / 100`；1UP 已拿满时追加「（1UP 已满）」；增强模式关闭时显示「未开启（增强模式）」。
 - **1UP**：已用掉的逐个画**删除线**（`×1` 一个一个），剩余的显示 `×N UP`（没有则显示「无」）。
 - **冷却**：剩余秒数；就绪时显示「就绪」；增强模式关闭时显示「未启用（增强模式）」。
-- **增强模式**：`− [已关闭/已开启] +` 三段式（**默认关闭**）：`−` 关、`+` 开，到边界时按钮置灰。关闭时下面两项整行置灰不可点。
+- **增强模式**：单个**切换按钮**（`已开启` / `已关闭`，**默认关闭**）——开启=金色高亮，关闭=深底灰字；点一下即切换。关闭时下面两项整行置灰不可点。
 - **每关 1UP 上限**：`− [1/2/3] +`（仅增强模式生效）。
 - **复活冷却（秒）**：`− [30/60/90] +`（仅增强模式生效）。
-- 所有选项一律用 `−/+` 按钮调节，**数值本身不可点、不允许直接输入**；当前值用金色徽章高亮（未选中项为深底），到边界的按钮自动置灰。
+- 数值类选项一律用 `−/+` 按钮调节，**数值本身不可点、不允许直接输入**；当前值用金色徽章高亮（未选中项为深底），到边界的按钮自动置灰。
 - 面板尺寸 484×440（屏幕右上角），标题行右侧显示 Mod 版本号（读程序集同目录的 info.ini，不会写死）。
 - 改动立即生效并**写回 config.txt**（只改 `enhancedMode` / `maxRewinds` / `rewindCooldown` 三行）。
 - 切换增强模式会清零本关的分数与已赚 1UP（不跨模式保留）。
@@ -436,5 +436,5 @@ bash tools/build.sh
 24. **实时状态里的敌人条目只能在该敌人 `Health` 确实被游戏销毁时移除**（`EntitySampler.RemoveEntry` → `LiveStateStore.RemoveEnemy`）。**禁止**按"登记超时"等超龄条件移除——还活着的敌人若被提前移出 store，就不在回退差量的 ids 集合（ids = `anchor.Enemies` ∪ `store.EnemyKeys`）里，回退时会**逃过差量表、残留在这个世界里**。注意 `EvictStale` 按超龄淘汰时**不得**调用 `RemoveEnemy`。
 25. **敌人相关查询必须走字典，不能线性扫描注册表**：`FindHealthById` / `GetEnemyObject` / `GetEnemyId` / `GetEnemyAi` / `GetEnemyReceiver` 都在 full 模式的锚点构建与回退差量循环里按敌人逐个调用，线性扫描会退化成 O(n²)（每 5 秒一次锚点构建，长单局必然卡顿）。
 26. **「1UP」提示音的音频必须内嵌 + 自行解码**：mp3 只有 Unity 的导入管线或 `UnityWebRequest` 能解，Mod 目录既不是 Unity 工程也不保证可读 → 构建期转成 16bit PCM WAV 内嵌进程序集，运行时用 `WavPcm` 逐 chunk 解析（转换产物在 `fmt` 与 `data` 之间会夹 `FLER` 等附属 chunk，固定偏移解析会读错）。触发判定放在纯逻辑 `OneUpCue` 里（关卡生命周期武装），**不要**直接跟着 HUD 指示器可见性走——主菜单里 `RewindCount < MaxRewinds` 恒成立，会在进游戏前就响。
-27. **击杀积分只认"我们亲眼看见它死了"**：`EntitySampler` 靠采样时的「存活 → 死亡」跳变判定击杀，并按稳定 id 去重；**不要**在敌人被移出注册表（距离淘汰 / 对象销毁）时补记击杀——换场景时全场敌人一起销毁，会瞬间刷出一堆假 1UP。游戏没有可靠的"被玩家击杀"信号，环境造成的死亡同样计分。
+27. **击杀积分只算玩家击杀，判定方式与任务系统一致**：`EntitySampler` 订阅**静态事件** `Health.OnDead`（签名 `Action<Health, DamageInfo>`），用 `DamageInfo.fromCharacter` 判断击杀者——`killer.Health.IsMainCharacterHealth` 为真才算玩家击杀（游戏任务计数 `QuestTask_KillCount.Health_OnDead` 用的是同一条判据 `CharacterMainControlExtensions.IsMainCharacter`）。**不要**改回"采样时观察存活→死亡跳变"那种判定：它拿不到 `DamageInfo`，分不清玩家击杀与环境/队友击杀。`Health.OnDead` 是静态事件，**Mod 停用时必须 `UnsubscribeDeathEvents()` 退订**。
 28. **多次复活必须让回溯窗口随使用次数扩展**：第一次回溯会丢弃更年轻的锚点，若窗口固定 60s，第二次回溯就没有可选目标 → 有效窗口 `maxRewindAge × (已用次数 + 1)`。实际能回溯多深仍受锚点环保留量限制（每空间 `anchorCount` × 间隔）。

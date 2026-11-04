@@ -35,6 +35,8 @@ namespace DeathRewind.UI
         private static GUIStyle _stepStyle;
         private static GUIStyle _badgeStyle;
         private static GUIStyle _badgeOnStyle;
+        private static GUIStyle _toggleOnStyle;
+        private static GUIStyle _toggleOffStyle;
         private static GUIStyle _footerStyle;
 
         /// <summary>面板是否打开。</summary>
@@ -112,16 +114,19 @@ namespace DeathRewind.UI
             int cap = owner.Config != null ? owner.Config.MaxRewinds : 1;
             int cd = owner.Config != null ? owner.Config.RewindCooldownSeconds : 60;
 
-            // 增强模式（默认关闭：保持旧行为）——「− 已关闭 +」二值调节
+            // 增强模式（默认关闭：保持旧行为）——单个切换按钮：开启=金色，关闭=深底
             GUILayout.Label("增强模式", _sectionStyle);
             GUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
-            if (StepButton("−", !enhanced)) owner.ApplyPanelSettings(false, cap, cd);
-            DrawBadge(enhanced ? "已开启" : "已关闭", enhanced);
-            if (StepButton("+", !enhanced)) owner.ApplyPanelSettings(true, cap, cd);
+            if (GUILayout.Button(enhanced ? "已开启" : "已关闭",
+                                 enhanced ? _toggleOnStyle : _toggleOffStyle,
+                                 GUILayout.Width(150f), GUILayout.Height(30f)))
+            {
+                owner.ApplyPanelSettings(!enhanced, cap, cd);
+            }
             GUILayout.EndHorizontal();
             GUILayout.Label(enhanced
-                ? "开启中：击杀积分可换 1UP，每关上限与复活冷却生效。"
+                ? "开启中：自己击杀的生物可积分换 1UP，每关上限与复活冷却生效。"
                 : "关闭中：保持默认——每关一次复活，不计分、无冷却。", _hintStyle);
 
             GUILayout.Space(8f);
@@ -246,6 +251,33 @@ namespace DeathRewind.UI
             _badgeOnStyle = new GUIStyle(_badgeStyle);
             _badgeOnStyle.normal.background = MakeTexture(SelectedColor);
             _badgeOnStyle.normal.textColor = SelectedTextColor;
+
+            // 增强模式切换按钮：开启=金色高亮，关闭=深底灰字
+            _toggleOnStyle = new GUIStyle(GUI.skin.button)
+            {
+                fontSize = 16,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter,
+                padding = new RectOffset(10, 10, 4, 4),
+            };
+            _toggleOnStyle.normal.background = MakeTexture(SelectedColor);
+            _toggleOnStyle.normal.textColor = SelectedTextColor;
+            _toggleOnStyle.hover.background = MakeTexture(new Color(1f, 0.87f, 0.42f));
+            _toggleOnStyle.hover.textColor = SelectedTextColor;
+            _toggleOnStyle.active.background = MakeTexture(new Color(0.88f, 0.68f, 0.18f));
+            _toggleOnStyle.active.textColor = SelectedTextColor;
+
+            _toggleOffStyle = new GUIStyle(GUI.skin.button)
+            {
+                fontSize = 16,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter,
+                padding = new RectOffset(10, 10, 4, 4),
+            };
+            _toggleOffStyle.normal.background = MakeTexture(new Color(0.12f, 0.12f, 0.14f, 0.8f));
+            _toggleOffStyle.normal.textColor = new Color(0.85f, 0.85f, 0.85f, 0.95f);
+            _toggleOffStyle.hover.background = MakeTexture(new Color(0.26f, 0.26f, 0.30f, 0.95f));
+            _toggleOffStyle.hover.textColor = Color.white;
 
             _footerStyle = new GUIStyle(GUI.skin.button) { fontSize = 15, fontStyle = FontStyle.Bold };
             _footerStyle.normal.background = MakeTexture(new Color(0.16f, 0.16f, 0.18f, 0.85f));

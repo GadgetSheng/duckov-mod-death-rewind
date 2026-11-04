@@ -183,6 +183,7 @@ namespace DeathRewind
             RewindIndicator.Dispose();
             OneUpSound.Dispose();
             RewindSettingsPanel.Dispose();
+            _sampler?.UnsubscribeDeathEvents();   // 退订全局死亡事件（静态事件，必须断开）
             _hooks?.Uninstall();
             ModLog.Log("[DeathRewind] deactivated");
         }
@@ -347,7 +348,7 @@ namespace DeathRewind
         {
             bool granted = _score.AddKill(isBoss);
             // 击杀日志走普通通道（每次击杀都打会刷屏）；发放 1UP 是决策级事件，始终输出
-            ModLog.Log($"[DeathRewind] 击杀 {(isBoss ? "BOSS" : "生物")} → 得分 {_score.Score}/{ScoreState.PointsPerUp}");
+            ModLog.Log($"[DeathRewind] 玩家击杀 {(isBoss ? "BOSS" : "生物")} → 得分 {_score.Score}/{ScoreState.PointsPerUp}");
             if (granted)
             {
                 ModLog.LogImportant($"[DeathRewind] 积分满 {ScoreState.PointsPerUp} → +1UP！剩余 {_score.Held} 次");
