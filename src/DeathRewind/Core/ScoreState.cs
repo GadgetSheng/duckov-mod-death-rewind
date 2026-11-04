@@ -5,7 +5,9 @@ namespace DeathRewind.Core
     /// <summary>
     /// 积分与 1UP 记账（纯逻辑）。
     ///
-    /// 规则：
+    /// **增强模式默认关闭**——关闭时保持旧行为：每关只有保底的 1 次复活，不计分、
+    /// 不发放额外 1UP（上限与冷却也不生效，由调用方按同一开关处理）。
+    /// 开启后规则如下：
     /// · 每关保底 <see cref="BaseUps"/> 次复活；上限 <see cref="Cap"/>（1~3）；
     /// · 击杀 BOSS 得 <see cref="BossPoints"/> 分，普通生物得 <see cref="CreaturePoints"/> 分；
     /// · 累计 <see cref="PointsPerUp"/> 分发放 1 次额外复活，并把分数清零；
@@ -36,8 +38,14 @@ namespace DeathRewind.Core
         /// <summary>本关已消耗的 1UP 数。</summary>
         public int UpsUsed { get; private set; }
 
-        /// <summary>本关可持有的 1UP 总数（保底 + 积分获得，受上限约束）。</summary>
-        public int TotalUps => Math.Min(Cap, BaseUps + UpsEarned);
+        /// <summary>增强模式：开启后积分才能换 1UP、每关上限与冷却才生效。默认关闭（保持旧行为）。</summary>
+        public bool Enhanced { get; private set; }
+
+        /// <summary>实际生效的每关 1UP 上限：增强模式关闭时固定为保底 1 次（保持旧行为）。</summary>
+        public int EffectiveCap => Enhanced ? Cap : BaseUps;
+
+        /// <summary>本关可持有的 1UP 总数（保底 + 积分获得，受生效上限约束）。</summary>
+        public int TotalUps => Math.Min(EffectiveCap, BaseUps + UpsEarned);
         /// <summary>当前还能复活几次。</summary>
         public int Held => Math.Max(0, TotalUps - UpsUsed);
         /// <summary>是否已经拿满本关的 1UP（不能再靠积分增加）。</summary>
@@ -63,10 +71,25 @@ namespace DeathRewind.Core
         }
 
         /// <summary>
+        /// 切换增强模式。模式变化时经济状态重算（分数与已赚 1UP 不跨模式保留），
+        /// 避免"关掉再打开"白拿一次 1UP。
+        /// </summary>
+        public void SetEnhanced(bool enabled)
+        {
+            if (Enhanced == enabled) return;
+            Enhanced = enabled;
+            Score = 0;
+            UpsEarned = 0;
+            UpsUsed = 0;
+        }
+
+        /// <summary>
         /// 记一次击杀。返回 true 表示**刚好凑满 100 分、发放了一次额外 1UP**（需要播音效）。
+        /// 增强模式关闭时什么都不做（不计分、不发放）。
         /// </summary>
         public bool AddKill(bool isBoss)
         {
+            if (!Enhanced) return false;
             Score += isBoss ? BossPoints : CreaturePoints;
             if (Score < PointsPerUp) return false;
 

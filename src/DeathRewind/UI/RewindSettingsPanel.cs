@@ -38,7 +38,7 @@ namespace DeathRewind.UI
             if (!_open || owner == null) return;
             EnsureStyles();
 
-            var area = new Rect(Screen.width - 360f, 90f, 340f, 250f);
+            var area = new Rect(Screen.width - 360f, 90f, 340f, 300f);
             GUI.Box(area, GUIContent.none);
             GUILayout.BeginArea(new Rect(area.x + 14f, area.y + 10f, area.width - 28f, area.height - 20f));
 
@@ -47,6 +47,7 @@ namespace DeathRewind.UI
 
             var score = owner.ScoreState;
             var cooldown = owner.RewindCooldown;
+            bool enhanced = score != null && score.Enhanced;
             double remain = cooldown != null ? cooldown.Remaining(owner.CurrentTick) : 0;
 
             // 得分
@@ -54,10 +55,11 @@ namespace DeathRewind.UI
             GUILayout.Label("得分", _labelStyle, GUILayout.Width(64f));
             if (score != null)
             {
-                string text = score.AtCap
-                    ? $"{score.Score} / {ScoreState.PointsPerUp}（1UP 已满）"
-                    : $"{score.Score} / {ScoreState.PointsPerUp}";
-                GUILayout.Label(text, _valueStyle);
+                string text;
+                if (!enhanced) text = "未开启（增强模式）";
+                else if (score.AtCap) text = $"{score.Score} / {ScoreState.PointsPerUp}（1UP 已满）";
+                else text = $"{score.Score} / {ScoreState.PointsPerUp}";
+                GUILayout.Label(text, enhanced ? _valueStyle : _mutedStyle);
             }
             GUILayout.EndHorizontal();
 
@@ -81,7 +83,8 @@ namespace DeathRewind.UI
             // 冷却
             GUILayout.BeginHorizontal();
             GUILayout.Label("冷却", _labelStyle, GUILayout.Width(64f));
-            GUILayout.Label(remain > 0 ? $"{remain:0} 秒" : "就绪", _valueStyle);
+            if (!enhanced) GUILayout.Label("未启用（增强模式）", _mutedStyle);
+            else GUILayout.Label(remain > 0 ? $"{remain:0} 秒" : "就绪", _valueStyle);
             GUILayout.EndHorizontal();
 
             GUILayout.Space(6f);
@@ -89,12 +92,27 @@ namespace DeathRewind.UI
             int cap = owner.Config != null ? owner.Config.MaxRewinds : 1;
             int cd = owner.Config != null ? owner.Config.RewindCooldownSeconds : 60;
 
+            // 增强模式开关：默认关闭（保持旧行为：每关一次复活、不计分、无冷却）
+            GUILayout.Label("增强模式", _labelStyle);
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(enhanced ? "已开启" : "已关闭", enhanced ? _buttonOnStyle : _buttonStyle))
+                owner.ApplyPanelSettings(!enhanced, cap, cd);
+            GUILayout.EndHorizontal();
+            GUILayout.Label(enhanced
+                ? "开启中：积分可换 1UP，每关上限与冷却生效"
+                : "关闭中：保持默认（每关一次复活，不计分、无冷却）", _mutedStyle);
+
+            GUILayout.Space(4f);
+
+            // 以下两项只在增强模式开启时生效
+            bool previousEnabled = GUI.enabled;
+            GUI.enabled = previousEnabled && enhanced;
             GUILayout.Label("每关 1UP 上限", _labelStyle);
             GUILayout.BeginHorizontal();
             for (int i = 1; i <= 3; i++)
             {
                 if (GUILayout.Button(i.ToString(), i == cap ? _buttonOnStyle : _buttonStyle))
-                    owner.ApplyPanelSettings(i, cd);
+                    owner.ApplyPanelSettings(enhanced, i, cd);
             }
             GUILayout.EndHorizontal();
 
@@ -103,9 +121,10 @@ namespace DeathRewind.UI
             foreach (int value in new[] { 30, 60, 90 })
             {
                 if (GUILayout.Button(value.ToString(), value == cd ? _buttonOnStyle : _buttonStyle))
-                    owner.ApplyPanelSettings(cap, value);
+                    owner.ApplyPanelSettings(enhanced, cap, value);
             }
             GUILayout.EndHorizontal();
+            GUI.enabled = previousEnabled;
 
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("关闭 (Ctrl+I)")) Close();

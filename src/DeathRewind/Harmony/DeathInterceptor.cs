@@ -120,6 +120,9 @@ namespace DeathRewind.Harmony
         /// </summary>
         private static double EffectiveWindowAge(AnchorRing ring)
         {
+            // 增强模式关闭时保持旧行为：窗口固定 maxRewindAge
+            var score = _owner != null ? _owner.ScoreState : null;
+            if (score == null || !score.Enhanced) return _config.MaxRewindAge;
             int used = ring != null ? ring.RewindCount : 0;
             return _config.MaxRewindAge * (used + 1);
         }

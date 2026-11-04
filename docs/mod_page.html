@@ -517,7 +517,7 @@
     <!-- 首页 Hero -->
     <header id="hero" class="section hero">
         <div class="container">
-            <div class="version-tag">v1.0.12</div>
+            <div class="version-tag">v1.0.13</div>
             <h1 class="text-center" style="margin-top: 20px;">死亡回溯 <span class="text-accent">DeathRewind</span></h1>
             <p class="subtitle">
                 逃离鸭科夫的终极救星。<br>
@@ -561,11 +561,11 @@
             </div>
             <div class="card">
                 <h3>设置面板（Ctrl+I）</h3>
-                <p>游戏内按 <code>Ctrl+I</code> 打开：显示当前得分、1UP 存量（用掉的画删除线）与冷却倒计时；可调「每关 1UP 上限（1~3）」与「复活冷却（30/60/90 秒）」，改完立即生效并写回 config.txt。</p>
+                <p>游戏内按 <code>Ctrl+I</code> 打开：显示当前得分、1UP 存量（用掉的画删除线）与冷却倒计时；可开启「增强模式」，并调「每关 1UP 上限（1~3）」与「复活冷却（30/60/90 秒）」，改完立即生效并写回 config.txt。<strong>增强模式默认关闭</strong>，关闭时保持原样（每关一次复活）。</p>
             </div>
             <div class="card">
-                <h3>击杀积分换 1UP</h3>
-                <p>击杀 BOSS 得 50 分、普通生物得 5 分，累计 100 分额外获得一次复活机会（带音效），分数清零重新累计；分数每关重算。</p>
+                <h3>击杀积分换 1UP（增强模式）</h3>
+                <p>增强模式开启后：击杀 BOSS 得 50 分、普通生物得 5 分，累计 100 分额外获得一次复活机会（带音效），分数清零重新累计；分数每关重算。</p>
             </div>
             <div class="card">
                 <h3>世界默认不回滚</h3>
@@ -826,14 +826,19 @@
                     <td>「1UP」提示音音量（0~1）</td>
                 </tr>
                 <tr>
+                    <td><span class="config-key">enhancedMode</span></td>
+                    <td><span class="config-val">false</span></td>
+                    <td>增强模式总开关：开启后积分换 1UP、每关上限与冷却才生效</td>
+                </tr>
+                <tr>
                     <td><span class="config-key">maxRewinds</span></td>
                     <td><span class="config-val">1</span></td>
-                    <td>每关 1UP 上限（1~3）：保底 1 次复活，额外次数靠击杀积分赚</td>
+                    <td>每关 1UP 上限（1~3），仅增强模式生效</td>
                 </tr>
                 <tr>
                     <td><span class="config-key">rewindCooldown</span></td>
                     <td><span class="config-val">60</span></td>
-                    <td>复活冷却间隔（秒）：30 / 60 / 90</td>
+                    <td>复活冷却间隔（秒）：30 / 60 / 90，仅增强模式生效</td>
                 </tr>
                 </table>
         </div>
@@ -891,13 +896,14 @@
         </div>
         <div class="container">
             <div class="changelog-item">
-                <div class="changelog-date">v1.0.12</div>
-                <div class="changelog-title">设置面板 · 积分 · 多次复活</div>
+                <div class="changelog-date">v1.0.13</div>
+                <div class="changelog-title">设置面板 · 增强模式 · 积分 · 多次复活</div>
                 <ul style="padding-left: 20px; font-size: 0.9rem; color: var(--text-muted);">
                     <li>游戏内按 <code>Ctrl+I</code> 打开设置面板：显示得分、1UP 存量（用掉的画删除线）、冷却倒计时。</li>
+                    <li><strong>增强模式默认关闭</strong>——关闭时保持原样（每关一次复活、不计分、无冷却）；开启后才生效下面几项。</li>
                     <li>可调「每关 1UP 上限（1~3）」与「复活冷却（30/60/90 秒）」，改完立即生效并写回 config.txt。</li>
-                    <li>击杀积分：BOSS 50 分、普通生物 5 分，累计 100 分额外 +1UP（带音效），分数每关重算。</li>
-                    <li>多次复活：用掉一次复活后进入冷却，冷却结束可再次回溯。</li>
+                    <li>击杀积分（增强模式）：BOSS 50 分、普通生物 5 分，累计 100 分额外 +1UP（带音效），分数每关重算。</li>
+                    <li>多次复活（增强模式）：用掉一次复活后进入冷却，冷却结束可再次回溯。</li>
                 </ul>
             </div>
             <div class="changelog-item">
@@ -938,7 +944,7 @@
                 </p>
             </div>
             <p style="margin-top: 20px; font-size: 0.7rem; opacity: 0.5;">
-                DeathRewind v1.0.12 · Unity Mono + Harmony 2.x · net472
+                DeathRewind v1.0.13 · Unity Mono + Harmony 2.x · net472
             </p>
         </div>
     </footer>

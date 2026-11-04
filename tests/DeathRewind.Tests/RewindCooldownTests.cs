@@ -74,5 +74,19 @@ namespace DeathRewind.Tests
             Assert.True(cd.IsReady(0));
             Assert.Equal(0, cd.Remaining(0));
         }
+
+        [Fact]
+        public void Disabled_IsAlwaysReady_AndStartDoesNothing()
+        {
+            var cd = new RewindCooldown();
+            cd.SetDuration(60);
+            cd.Enabled = false;
+
+            cd.Start(0);
+
+            Assert.True(cd.IsReady(0));
+            Assert.True(cd.IsReady(10));
+            Assert.Equal(0, cd.Remaining(0));
+        }
     }
 }

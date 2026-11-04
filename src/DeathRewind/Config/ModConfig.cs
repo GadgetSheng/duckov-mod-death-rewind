@@ -20,7 +20,9 @@ namespace DeathRewind.Config
         public double MaxRewindAge = 60;
         /// <summary>时间轴节点间隔（秒）：从最老节点向内按此步长取点。默认 10 → 60/50/40/30 四个节点。</summary>
         public double TimelineStep = 10;
-        /// <summary>每关 1UP 上限（1~3）：保底 1 次复活，靠击杀积分可再赚。游戏内用 Ctrl+I 面板调整。</summary>
+        /// <summary>增强模式：开启后积分可换 1UP、每关上限与复活冷却才生效。默认关闭（保持旧行为：每关一次复活）。</summary>
+        public bool EnhancedMode = false;
+        /// <summary>每关 1UP 上限（1~3）：保底 1 次复活，靠击杀积分可再赚。仅增强模式生效。</summary>
         public int MaxRewinds = 1;
         /// <summary>复活冷却间隔（秒）：只能用 30 / 60 / 90。第一次复活不受冷却限制。</summary>
         public int RewindCooldownSeconds = 60;
@@ -89,6 +91,7 @@ namespace DeathRewind.Config
                 cfg.OneUpSound = GetBool(raw, "oneUpSound", cfg.OneUpSound);
                 cfg.OneUpSoundVolume = GetDouble(raw, "oneUpSoundVolume", cfg.OneUpSoundVolume);
                 cfg.MaxRewinds = GetInt(raw, "maxRewinds", cfg.MaxRewinds);
+                cfg.EnhancedMode = GetBool(raw, "enhancedMode", cfg.EnhancedMode);
                 cfg.RewindCooldownSeconds = GetInt(raw, "rewindCooldown", cfg.RewindCooldownSeconds);
             }
             // ModConfig 框架覆盖：游戏内设置界面保存的值优先于 config.txt（框架未装则原样通过）
@@ -127,7 +130,7 @@ namespace DeathRewind.Config
         /// 把 Ctrl+I 面板改动的两项设置写回 config.txt（只改这两行，其余内容原样保留）。
         /// 这两项**不进 ModConfig 框架**（游戏内设置面板），否则框架的 ES3 值会盖掉面板写入的结果。
         /// </summary>
-        public static bool SavePanelSettings(int maxRewinds, int cooldownSeconds, out string error)
+        public static bool SavePanelSettings(bool enhancedMode, int maxRewinds, int cooldownSeconds, out string error)
         {
             error = null;
             try
@@ -138,6 +141,7 @@ namespace DeathRewind.Config
 
                 var lines = new List<string>();
                 if (File.Exists(path)) lines.AddRange(File.ReadAllLines(path));
+                ConfigFileLines.Upsert(lines, "enhancedMode", enhancedMode ? "true" : "false");
                 ConfigFileLines.Upsert(lines, "maxRewinds", maxRewinds.ToString(CultureInfo.InvariantCulture));
                 ConfigFileLines.Upsert(lines, "rewindCooldown", cooldownSeconds.ToString(CultureInfo.InvariantCulture));
                 File.WriteAllLines(path, lines);

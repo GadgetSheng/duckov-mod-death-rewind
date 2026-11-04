@@ -74,8 +74,8 @@ src/DeathRewind/
 | `EnemyPolicy` | 敌人对象生命周期策略（纯逻辑）：只销毁 Mod 自己停用的对象；Boss 不可被回退移除 | `CanDestroy`、`CanRemoveLateSpawned` |
 | `OneUpCue` | 「1UP」提示音的触发判定（纯逻辑）：关卡开始后第一次出现回溯机会时响一次，每关一次 | `OnLevelStarted`、`OnLevelEnded`、`ShouldPlay` |
 | `WavPcm` | 16bit PCM WAV 解码（纯逻辑）：把内嵌音频还原成交错浮点采样 | `TryDecode` |
-| `ScoreState` | 积分与 1UP 记账（纯逻辑）：BOSS 50 分 / 生物 5 分，满 100 分发 1UP 并清零，每关重算 | `ResetLevel`、`SetCap`、`AddKill`、`TryConsume` |
-| `RewindCooldown` | 复活冷却计时（纯逻辑）：用掉一次复活后开始计时，走有效 tick | `Start`、`Remaining`、`IsReady`、`SetDuration`、`Reset` |
+| `ScoreState` | 积分与 1UP 记账（纯逻辑）：BOSS 50 分 / 生物 5 分，满 100 分发 1UP 并清零，每关重算；**增强模式关闭时不计分、上限固定 1** | `ResetLevel`、`SetCap`、`SetEnhanced`、`AddKill`、`TryConsume` |
+| `RewindCooldown` | 复活冷却计时（纯逻辑）：用掉一次复活后开始计时，走有效 tick；**增强模式关闭时不启用** | `Start`、`Remaining`、`IsReady`、`SetDuration`、`Reset` |
 | `LevelHooks` | 订阅关卡/子场景/场景卸载/局结束事件并归一化为三个回调（子场景回调带场景名） | `OnLevelStarted`、`OnSubSceneLoaded(string)`、`OnLevelEnded` |
 | `LevelAccess` | 安全读取游戏静态状态（主角色、相机、容器表、场景键、加载态） | `MainCharacter`、`MainCamera`、`LootBoxInventories`、`CurrentSceneKey`、`LevelReady`、`MultiSceneLoading` |
 | `EntitySampler` | 定期采样玩家/敌人/容器/门；维护敌人稳定 Id、角色根物体与死亡敌人登记；锚点覆盖关系；**只销毁 Mod 自己停用的敌人** | `Sample`、`RegisterDeadEnemy`、`GetEnemyHealth`、`GetEnemyObject`、`GetEnemyRoot`、`IsBossEnemy`、`MarkDeferredDestroy`、`UnregisterFromDistanceStreaming`、`ReleaseAnchor`、`SetAnchorCoverage`、`ResetRegistry`、`RefreshRegistry` |
@@ -308,8 +308,9 @@ sequenceDiagram
 | `anchorCaptureBudgetMs` | `2` | 单帧采集时间预算（毫秒） |
 | `oneUpSound` | `true` | 是否播放「1UP」提示音（进关拿到回溯机会时响一次） |
 | `oneUpSoundVolume` | `1` | 「1UP」提示音音量（0~1，越界自动收窄） |
-| `maxRewinds` | `1` | 每关 1UP 上限（1~3）：保底 1 次复活，额外次数靠击杀积分赚 |
-| `rewindCooldown` | `60` | 复活冷却间隔（秒）：30 / 60 / 90，非法回落 60 |
+| `maxRewinds` | `1` | 每关 1UP 上限（1~3）：保底 1 次复活，额外次数靠击杀积分赚。**仅增强模式生效** |
+| `rewindCooldown` | `60` | 复活冷却间隔（秒）：30 / 60 / 90，非法回落 60。**仅增强模式生效** |
+| `enhancedMode` | `false` | 增强模式总开关：开启后积分换 1UP、每关上限与冷却才生效；关闭时保持旧行为（每关一次复活） |
 
 固定约束：`maxRewinds` 与 `rewindCooldown` **只走 config.txt + Ctrl+I 设置面板**，不进 ModConfig 框架（框架的 ES3 值会盖掉面板写入的结果）。
 
@@ -348,12 +349,14 @@ sequenceDiagram
 
 `RewindSettingsPanel`（屏幕右上角 IMGUI 区域，不暂停游戏）：
 
-- **得分**：`当前 / 100`；1UP 已拿满时追加「（1UP 已满）」。
+- **得分**：`当前 / 100`；1UP 已拿满时追加「（1UP 已满）」；增强模式关闭时显示「未开启（增强模式）」。
 - **1UP**：已用掉的逐个画**删除线**（`×1` 一个一个），剩余的显示 `×N UP`（没有则显示「无」）。
-- **冷却**：剩余秒数；就绪时显示「就绪」。
-- **每关 1UP 上限**：`1 / 2 / 3` 三个按钮。
-- **复活冷却（秒）**：`30 / 60 / 90` 三个按钮。
-- 改动立即生效并**写回 config.txt**（只改 `maxRewinds` / `rewindCooldown` 两行）。
+- **冷却**：剩余秒数；就绪时显示「就绪」；增强模式关闭时显示「未启用（增强模式）」。
+- **增强模式**：`已开启 / 已关闭` 切换按钮（**默认关闭**）。关闭时下面两项置灰不可点。
+- **每关 1UP 上限**：`1 / 2 / 3` 三个按钮（仅增强模式生效）。
+- **复活冷却（秒）**：`30 / 60 / 90` 三个按钮（仅增强模式生效）。
+- 改动立即生效并**写回 config.txt**（只改 `enhancedMode` / `maxRewinds` / `rewindCooldown` 三行）。
+- 切换增强模式会清零本关的分数与已赚 1UP（不跨模式保留）。
 
 ---
 
@@ -382,7 +385,7 @@ bash tools/build.sh
 
 ## 11. 设计红线与已知约束
 
-1. 每关复活次数上限可配（`maxRewinds` 1~3，默认 1）：保底 1 次，额外次数靠击杀积分赚（满 100 分 +1UP 并清零）；用掉一次后进入冷却（`rewindCooldown` 30/60/90 秒）。
+1. 每关复活次数上限可配（`maxRewinds` 1~3，默认 1）：保底 1 次，额外次数靠击杀积分赚（满 100 分 +1UP 并清零）；用掉一次后进入冷却（`rewindCooldown` 30/60/90 秒）。**整套能力由 `enhancedMode` 总开关控制，默认关闭 → 保持旧行为（每关一次复活、不计分、无冷却）**。
 2. 默认 `position` 模式：锚点纯内存、无磁盘 IO；`full` 模式才做世界回滚。
 3. 只在地图实际游玩场景建锚点；地道/楼层/室内子场景不回溯。
 4. 子场景有独立坐标原点，锚点必须按 `SceneKey` 过滤，跨场景坐标不可复用。

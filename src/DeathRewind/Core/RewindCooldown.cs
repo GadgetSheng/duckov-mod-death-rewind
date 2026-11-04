@@ -17,6 +17,12 @@ namespace DeathRewind.Core
         private double _duration = DefaultDuration;
         private double _lastUsedAt = double.NaN;
 
+        /// <summary>
+        /// 冷却是否启用。**增强模式关闭时置 false**：保持旧行为（随时都能复活）。
+        /// 关闭时 <see cref="Start"/> 不记录、<see cref="Remaining"/> 恒为 0。
+        /// </summary>
+        public bool Enabled { get; set; } = true;
+
         /// <summary>冷却时长（秒）。</summary>
         public double Duration => _duration;
 
@@ -26,6 +32,7 @@ namespace DeathRewind.Core
         /// <summary>剩余冷却秒数（&lt;= 0 表示就绪）。</summary>
         public double Remaining(double now)
         {
+            if (!Enabled) return 0;
             if (double.IsNaN(_lastUsedAt)) return 0;
             double left = _lastUsedAt + _duration - now;
             return left > 0 ? left : 0;
@@ -37,6 +44,7 @@ namespace DeathRewind.Core
         /// <summary>开始一次冷却计时（复活成功后调用）。</summary>
         public void Start(double now)
         {
+            if (!Enabled) return;
             _lastUsedAt = now;
         }
 

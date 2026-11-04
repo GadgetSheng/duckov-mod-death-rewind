@@ -89,8 +89,10 @@ namespace DeathRewind
             // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
-            _sampler.EnemyKilled += OnEnemyKilled;   // 击杀 → 积分 → 1UP
+            _sampler.EnemyKilled += OnEnemyKilled;   // 击杀 → 积分 → 1UP（增强模式关闭时不计分）
+            _score.SetEnhanced(_config.EnhancedMode);
             _score.SetCap(_config.MaxRewinds);
+            _cooldown.Enabled = _config.EnhancedMode;   // 增强模式关闭 → 无冷却（保持旧行为）
             _cooldown.SetDuration(_config.RewindCooldownSeconds);
             _builder = new AnchorBuilder(_config, _store, _ring, _sampler, CaptureAnchorThumbnail);   // 锚点采集需要按 ID 找回敌人物品
             _restorer = new WorldRestorer(_config, _ring, _store);
@@ -362,19 +364,24 @@ namespace DeathRewind
         }
 
         /// <summary>设置面板改动：立即生效并写回 config.txt（供下次启动读取）。</summary>
-        public void ApplyPanelSettings(int maxRewinds, int cooldownSeconds)
+        public void ApplyPanelSettings(bool enhancedMode, int maxRewinds, int cooldownSeconds)
         {
             if (_config == null) return;
+            _config.EnhancedMode = enhancedMode;
             _config.MaxRewinds = Mathf.Clamp(maxRewinds, 1, 3);
             _config.RewindCooldownSeconds = (cooldownSeconds == 30 || cooldownSeconds == 60 || cooldownSeconds == 90)
                 ? cooldownSeconds
                 : 60;
+            // 增强模式开关：切到关闭时经济状态清零（分数 / 已赚 1UP 不跨模式保留）
+            _score.SetEnhanced(_config.EnhancedMode);
             _score.SetCap(_config.MaxRewinds);
+            _cooldown.Enabled = _config.EnhancedMode;
             _cooldown.SetDuration(_config.RewindCooldownSeconds);
             _ring?.Reconfigure(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
-            if (ModConfig.SavePanelSettings(_config.MaxRewinds, _config.RewindCooldownSeconds, out var error))
+            if (ModConfig.SavePanelSettings(_config.EnhancedMode, _config.MaxRewinds, _config.RewindCooldownSeconds, out var error))
             {
-                ModLog.LogImportant($"[DeathRewind] 设置已保存：每关 1UP 上限 {_config.MaxRewinds}，复活冷却 {_config.RewindCooldownSeconds} 秒");
+                ModLog.LogImportant($"[DeathRewind] 设置已保存：增强模式={(_config.EnhancedMode ? "开" : "关")}，" +
+                                     $"每关 1UP 上限 {_config.MaxRewinds}，复活冷却 {_config.RewindCooldownSeconds} 秒");
             }
             else
             {
