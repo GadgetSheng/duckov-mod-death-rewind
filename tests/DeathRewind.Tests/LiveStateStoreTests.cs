@@ -52,5 +52,31 @@ namespace DeathRewind.Tests
             Assert.Null(store.GetEnemy("enemy:1"));
             Assert.NotNull(store.GetEnemy("enemy:2"));
         }
+
+        [Fact]
+        public void RemoveEnemy_RemovesOnlyTargetedKey()
+        {
+            var store = new LiveStateStore();
+            store.SetEnemy("enemy:1", new EnemyState { Health = 30f, Alive = true });
+            store.SetEnemy("enemy:2", new EnemyState { Health = 40f, Alive = true });
+
+            store.RemoveEnemy("enemy:1");
+
+            Assert.Null(store.GetEnemy("enemy:1"));
+            Assert.NotNull(store.GetEnemy("enemy:2"));
+            Assert.Equal(40f, store.GetEnemy("enemy:2").Health);
+        }
+
+        [Fact]
+        public void RemoveEnemy_MissingKey_DoesNotThrow()
+        {
+            var store = new LiveStateStore();
+            store.SetEnemy("enemy:1", new EnemyState { Health = 30f, Alive = true });
+
+            store.RemoveEnemy("enemy:999");
+            store.RemoveEnemy(null);
+
+            Assert.NotNull(store.GetEnemy("enemy:1"));
+        }
     }
 }

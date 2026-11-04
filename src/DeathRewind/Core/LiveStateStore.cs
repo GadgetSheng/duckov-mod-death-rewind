@@ -17,6 +17,24 @@ namespace DeathRewind.Core
         public PlayerState GetPlayer() => _player;
 
         public void SetEnemy(string key, EnemyState state) => _enemies[key] = state?.Clone();
+
+        /// <summary>
+        /// 移除一个敌人的实时状态。
+        ///
+        /// 语义约束（**调用方必须遵守**，否则会破坏回退差量）：
+        /// 只能在该敌人的 <c>Health</c> 组件**确实已被游戏销毁**时调用 ——
+        /// 即"这个敌人已经不在世界上了"的时刻。
+        ///
+        /// 禁止按"登记超时"等**超龄**条件调用：还活着的敌人若被提前移出 store，
+        /// 它就不在 <c>ApplyEnemyDiffAsync</c> 的 ids 集合里（ids = anchor.Enemies ∪ store.EnemyKeys），
+        /// 回退时会**逃过差量表**、残留在回退后的世界里。
+        /// </summary>
+        public void RemoveEnemy(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            _enemies.Remove(key);
+        }
+
         public EnemyState GetEnemy(string key) => _enemies.TryGetValue(key, out var v) ? v : null;
 
         public void SetContainer(string key, ContainerState state) => _containers[key] = state?.Clone();

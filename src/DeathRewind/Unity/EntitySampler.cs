@@ -14,6 +14,8 @@ namespace DeathRewind.Unity
         private readonly double _anchorInterval;
         private readonly Dictionary<Health, string> _enemyIds = new Dictionary<Health, string>();
         private readonly Dictionary<GameObject, string> _enemyObjects = new Dictionary<GameObject, string>();
+        private readonly Dictionary<string, Health> _idToHealth = new Dictionary<string, Health>();
+        private readonly Dictionary<string, GameObject> _idToObjects = new Dictionary<string, GameObject>();
         /// <summary>敌人稳定 ID → 角色根物体。Health 组件可能挂在子物体上，位姿/停用都必须作用在根物体上。</summary>
         private readonly Dictionary<string, GameObject> _enemyRoots = new Dictionary<string, GameObject>();
         /// <summary>Mod 自己停用过的敌人 ID。只有这些对象 Mod 才有权销毁——游戏自己停用的（按玩家距离卸载等）不能碰。</summary>
@@ -116,6 +118,8 @@ namespace DeathRewind.Unity
             string id = "enemy:" + (++_enemySeq);
             _enemyIds[health] = id;
             _enemyObjects[health.gameObject] = id;
+            _idToHealth[id] = health;
+            _idToObjects[id] = health.gameObject;
             _registeredAt[id] = _now;
             if (ai != null) _enemyControllers[health] = ai;
             var receiver = FindDamageReceiver(health);
@@ -219,6 +223,8 @@ namespace DeathRewind.Unity
             string id = "enemy:" + (++_enemySeq);
             _enemyIds[health] = id;
             _enemyObjects[health.gameObject] = id;
+            _idToHealth[id] = health;
+            _idToObjects[id] = health.gameObject;
             _registeredAt[id] = _now;
             // 死亡持久化补丁会停用角色根物体 → 该尸体由 Mod 接管，可由 Mod 销毁
             _modDeactivated.Add(id);
@@ -250,23 +256,14 @@ namespace DeathRewind.Unity
         public GameObject GetEnemyObject(string id)
         {
             if (string.IsNullOrEmpty(id)) return null;
-            foreach (var kv in _enemyObjects)
-            {
-                if (kv.Value != id) continue;
-                return kv.Key;
-            }
-            return null;
+            return _idToObjects.TryGetValue(id, out var go) ? go : null;
         }
 
         /// <summary>反向查询：GameObject → 稳定 ID；不在注册表内时返回 null。</summary>
         public string GetEnemyId(GameObject go)
         {
             if (go == null) return null;
-            foreach (var kv in _enemyObjects)
-            {
-                if (kv.Key == go) return kv.Value;
-            }
-            return null;
+            return _enemyObjects.TryGetValue(go, out var id) ? id : null;
         }
 
         /// <summary>按稳定 ID 找回门；对象已被销毁时返回 null。</summary>
@@ -346,12 +343,8 @@ namespace DeathRewind.Unity
         private Health FindHealthById(string id)
         {
             if (string.IsNullOrEmpty(id)) return null;
-            foreach (var kv in _enemyIds)
-            {
-                if (kv.Value != id) continue;
-                return kv.Key == null ? null : kv.Key;   // 已销毁的 Health 走 Unity 的 == null 判定
-            }
-            return null;
+            if (!_idToHealth.TryGetValue(id, out var health)) return null;
+            return health == null ? null : health;   // 已销毁的 Health 走 Unity 的 == null 判定
         }
 
         /// <summary>按稳定 ID 找回角色根物体（Health 可能在子物体上，停用/位姿要作用在根物体上）。</summary>
@@ -455,12 +448,10 @@ namespace DeathRewind.Unity
             {
                 _registeredAt.Remove(id);
                 DestroyEnemyIfOwned(id);
-                foreach (var kv in new List<KeyValuePair<GameObject, string>>(_enemyObjects))
-                {
-                    if (kv.Value != id) continue;
-                    _enemyObjects.Remove(kv.Key);
-                }
-                _enemyRoots.Remove(id);
+                // [FIX: 2026-10-31] O(1) 清理：_idToObjects 已经存了 id→GameObject，无需再全表扫描 _enemyObjects
+                if (_idToObjects.TryGetValue(id, out var go))
+                    _enemyObjects.Remove(go);
+                _idToObjects.Remove(id);
                 _modDeactivated.Remove(id);
             }
         }
@@ -475,6 +466,8 @@ namespace DeathRewind.Unity
             _registeredAt.Clear();
             _anchorCovered.Clear();
             _deferredDestroy.Clear();
+            _idToHealth.Clear();
+            _idToObjects.Clear();
         }
 
         /// <summary>子场景加载：剔除已销毁对象的引用，保留其余稳定 ID。</summary>
@@ -486,14 +479,26 @@ namespace DeathRewind.Unity
                 if (kv.Key == null) _doorIds.Remove(kv.Key);
         }
 
+        /// <summary>
+        /// [FIX: 2026-10-31] 假 null 修复 + O(1) 清理
+        /// - 假 null：Unity 假 null 下 `key != null` 恒为 false，导致字典条目永久泄漏
+        /// - O(n) 清理：原代码扫描 _enemyObjects 列表 O(n)，现改为 O(1) 直接从 _idToObjects 删除
+        /// </summary>
         private void RemoveEntry(string id, Health key)
         {
             _registeredAt.Remove(id);
             _enemyRoots.Remove(id);
             _modDeactivated.Remove(id);
-            if (key != null) _enemyIds.Remove(key);
-            foreach (var kv in new List<KeyValuePair<GameObject, string>>(_enemyObjects))
-                if (kv.Value == id) _enemyObjects.Remove(kv.Key);
+            // key 是"已被游戏销毁的 Health"——Unity 假 null 判定下 `key != null` 恒为 false，
+            // 用它做守卫会导致字典条目永远删不掉（每死一个敌人泄漏一条 + 每 0.25s 产生 O(n) List 垃圾）。
+            // Dictionary 按 m_InstanceID 比较，已销毁对象同样能正确命中并删除，故无条件删除。
+            if (!object.ReferenceEquals(key, null)) _enemyIds.Remove(key);
+            // O(1) 清理：_idToObjects 已经存了 id→GameObject，无需再全表扫描 _enemyObjects
+            if (_idToObjects.TryGetValue(id, out var go) && !object.ReferenceEquals(go, null))
+                _enemyObjects.Remove(go);
+            _idToHealth.Remove(id);
+            _idToObjects.Remove(id);
+            _store?.RemoveEnemy(id);
         }
 
         private string ResolveTargetId(AICharacterController ai)
@@ -514,22 +519,20 @@ namespace DeathRewind.Unity
         /// <summary>按稳定 ID 取敌人的 AI 控制器（回退时写回索敌状态用）。</summary>
         public AICharacterController GetEnemyAi(string id)
         {
-            foreach (var kv in _enemyIds)
-                if (kv.Value == id)
-                {
-                    if (kv.Key == null) return null;
-                    if (_enemyControllers.TryGetValue(kv.Key, out var ai)) return ai;
-                    return FindAiController(kv.Key);
-                }
-            return null;
+            if (string.IsNullOrEmpty(id)) return null;
+            if (!_idToHealth.TryGetValue(id, out var health)) return null;
+            if (health == null) return null;
+            if (_enemyControllers.TryGetValue(health, out var ai)) return ai;
+            return FindAiController(health);
         }
 
         /// <summary>按稳定 ID 取敌人的 DamageReceiver（AI 索敌对象）。</summary>
         public DamageReceiver GetEnemyReceiver(string id)
         {
-            foreach (var kv in _enemyIds)
-                if (kv.Value == id && kv.Key != null) return FindDamageReceiver(kv.Key);
-            return null;
+            if (string.IsNullOrEmpty(id)) return null;
+            if (!_idToHealth.TryGetValue(id, out var health)) return null;
+            if (health == null) return null;
+            return FindDamageReceiver(health);
         }
 
         /// <summary>按稳定 ID 取敌人角色（采集物品载荷用）；对象已销毁时返回 null。</summary>
