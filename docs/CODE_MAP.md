@@ -85,7 +85,7 @@ src/DeathRewind/
 | `MetaRestore` | 主存档原子覆盖 + `SavesSystem.SetFile` 触发元系统重载；回退前备份 | `OverwriteFrom`、`BackupCurrent` |
 | `InventoryPayload` | 背包与装备槽载荷的采集/解析/原地还原 | `Capture`、`Parse`、`ApplyAsync`、`CaptureItem`、`InstantiateItemAsync`、`CaptureSlots`、`ApplySlotsAsync`、`VerifyRoundTrip` |
 | `ThumbnailCapture` | 锚点构建同帧抓屏 → **专用抓图相机**渲到 192×108 RT → ReadPixels → 后台线程 PNG 编码 | `Capture`、`CaptureAsync`、`Dispose` |
-| `OneUpSound` | 「1UP」提示音播放：内嵌 WAV → `AudioClip` → `AudioSource.PlayOneShot`（2D） | `Play`、`Dispose` |
+| `OneUpSound` | 「1UP」提示音播放：**主路径 post 游戏自带 FMOD 事件 `UI/level_up`**（Duckov 的音频全是 FMOD 事件）；兜底 = 内嵌 WAV → `AudioClip` → `AudioSource.PlayOneShot` | `Play`、`Dispose` |
 | `DeathInterceptor` | 死亡入口前缀拦截、裁决流程、恢复编排与复活后守卫 | `Install`、`OnDeathPrefix`、`DeathChoiceRoutine`、`RestoreRoutine`、`PostReviveFixup`、`PostReviveGuard`、`AcceptDeath`、`ScheduleReplay` |
 | `EnemyPersistencePatch` | 阻止死亡敌人 `Health.DestroyOnDelay` 销毁 | `Health.DestroyOnDelay` 前缀 |
 | `EnemyLootboxPatch` | 阻止敌人死亡时装备被搬进尸体箱 | `InteractableLootbox.CreateFromItem` 前缀 |
@@ -307,7 +307,7 @@ sequenceDiagram
 | `anchorCaptureBatchSize` | `2` | 单帧最多采集容器数 |
 | `anchorCaptureBudgetMs` | `2` | 单帧采集时间预算（毫秒） |
 | `oneUpSound` | `true` | 是否播放「1UP」提示音（进关拿到回溯机会时响一次） |
-| `oneUpSoundVolume` | `1` | 「1UP」提示音音量（0~1，越界自动收窄） |
+| `oneUpSoundVolume` | `1` | 「1UP」提示音音量（0~1，越界自动收窄）。主路径走游戏自带 FMOD 事件，音量跟随游戏设置；这里只用来**关掉**（=0 不播） |
 | `maxRewinds` | `1` | 每关 1UP 上限（1~3）：保底 1 次复活，额外次数靠击杀积分赚。**仅增强模式生效** |
 | `rewindCooldown` | `60` | 复活冷却间隔（秒）：30 / 60 / 90，非法回落 60。**仅增强模式生效** |
 | `enhancedMode` | `false` | 增强模式总开关：开启后积分换 1UP、每关上限与冷却才生效；关闭时保持旧行为（每关一次复活） |
@@ -439,3 +439,4 @@ bash tools/build.sh
 27. **击杀积分只算玩家击杀，判定方式与任务系统一致**：`EntitySampler` 订阅**静态事件** `Health.OnDead`（签名 `Action<Health, DamageInfo>`），用 `DamageInfo.fromCharacter` 判断击杀者——`killer.Health.IsMainCharacterHealth` 为真才算玩家击杀（游戏任务计数 `QuestTask_KillCount.Health_OnDead` 用的是同一条判据 `CharacterMainControlExtensions.IsMainCharacter`）。**不要**改回"采样时观察存活→死亡跳变"那种判定：它拿不到 `DamageInfo`，分不清玩家击杀与环境/队友击杀。`Health.OnDead` 是静态事件，**Mod 停用时必须 `UnsubscribeDeathEvents()` 退订**。
 28. **多次复活必须让回溯窗口随使用次数扩展**：第一次回溯会丢弃更年轻的锚点，若窗口固定 60s，第二次回溯就没有可选目标 → 有效窗口 `maxRewindAge × (已用次数 + 1)`。实际能回溯多深仍受锚点环保留量限制（每空间 `anchorCount` × 间隔）。
 29. **抓缩略图不许碰游戏主相机**：在主相机上 `targetTexture = rt` + `cam.Render()` 会让主相机在帧中途多渲一次，Metal/macOS 上表现为**每 5 秒闪一帧**（锚点网格间隔 = 闪屏频率）。必须用专用抓图相机（`CopyFrom` 主相机设置 + 自己的 transform，`enabled = false`，只手动 `Render()` 到 RT）。同理，**不要**在帧中途用 `ScreenCapture.CaptureScreenshotAsTexture` 全屏回读（分配整屏纹理 + 卡顿）。
+30. **自定义音效必须走游戏的 FMOD 管线**：Duckov 的声音全是 FMOD 事件（`Duckov.AudioManager.Post` → `FMOD.Studio.EventInstance`），Unity 自己的 `AudioSource` 在游戏里**听不到**（实测：无报错、clip 有数据，但完全无声——Unity 这条输出通路被游戏静音了）。所以提示音主路径是 post 游戏自带事件 `UI/level_up`（语义=拿到 1UP，且跟随游戏音量/静音设置）。**不要**改回纯 `AudioSource.PlayOneShot` 当主路径——那正是"集满 100 分没有音效"的根因。FMOD 核心 API（`FMOD.System.createSound` 等）在游戏里**不可用**（`FMODUnity.dll` 只有 Studio API，`FMOD.Modes`/`SoundInfo` 缺失），所以自定义 WAV 只能留作兜底。

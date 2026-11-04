@@ -100,5 +100,10 @@
       <HintPath>$(DuckovManagedDir)/UnityEngine.AudioModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- 仅用于类型解析：Duckov.AudioManager 的签名里带 FMOD.Studio 类型（编译期需要） -->
+    <Reference Include="FMODUnity">
+      <HintPath>$(DuckovManagedDir)/FMODUnity.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 </Project>
