@@ -182,6 +182,7 @@ namespace DeathRewind
             EnemyPersistencePatch.Uninstall();
             RewindIndicator.Dispose();
             OneUpSound.Dispose();
+            RewindSettingsPanel.Dispose();
             _hooks?.Uninstall();
             ModLog.Log("[DeathRewind] deactivated");
         }

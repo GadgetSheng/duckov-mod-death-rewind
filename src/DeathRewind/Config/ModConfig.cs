@@ -126,6 +126,37 @@ namespace DeathRewind.Config
             Validate();
         }
 
+        /// <summary>Mod 版本号（懒加载）：从程序集同目录的 info.ini 读取，与发布信息始终一致。</summary>
+        public static string Version
+        {
+            get
+            {
+                if (_version != null) return _version;
+                try
+                {
+                    var dir = Path.GetDirectoryName(typeof(ModConfig).Assembly.Location);
+                    if (string.IsNullOrEmpty(dir)) return _version = "?";
+                    var ini = Path.Combine(dir, "info.ini");
+                    if (!File.Exists(ini)) return _version = "?";
+                    foreach (var line in File.ReadAllLines(ini))
+                    {
+                        var t = line.Trim();
+                        if (!t.StartsWith("version", StringComparison.OrdinalIgnoreCase)) continue;
+                        int eq = t.IndexOf('=');
+                        if (eq <= 0) continue;
+                        return _version = t.Substring(eq + 1).Trim();
+                    }
+                }
+                catch (Exception e)
+                {
+                    ModLog.LogWarning($"[DeathRewind] 读取 info.ini 版本号失败: {e.Message}");
+                }
+                return _version = "?";
+            }
+        }
+
+        private static string _version;
+
         /// <summary>
         /// 把 Ctrl+N 面板改动的设置写回 config.txt（只改这三行，其余内容原样保留）。
         /// 这几项**不进 ModConfig 框架**（游戏内设置面板），否则框架的 ES3 值会盖掉面板写入的结果。
