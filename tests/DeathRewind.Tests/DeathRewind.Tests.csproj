@@ -14,4 +14,9 @@
     <!-- 直接链接 Core 源文件：单测不触碰 Unity / 游戏程序集 -->
     <Compile Include="../../src/DeathRewind/Core/**/*.cs" LinkBase="Core" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- 与 Mod 内嵌的是同一份 WAV：单测直接验证这段音频能被解码器正确还原 -->
+    <EmbeddedResource Include="../../src/DeathRewind/Audio/oneup.wav" LogicalName="DeathRewind.Tests.oneup.wav" />
+  </ItemGroup>
 </Project>

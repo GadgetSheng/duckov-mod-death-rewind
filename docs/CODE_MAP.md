@@ -6,6 +6,8 @@
 
 本文是代码结构索引，不替代设计规格（`docs/superpowers/specs/`）与验证计划（`docs/superpowers/plans/`）。
 
+对外介绍页：`docs/mod_page.html`（单文件 HTML，介绍玩法、还原范围、配置项与更新日志）。
+
 ---
 
 ## 1. 目录与单元清单
@@ -23,6 +25,8 @@ src/DeathRewind/
 │   ├── RewindCandidate.cs
 │   ├── TimelineLayout.cs
 │   ├── DeathPanelLayout.cs
+│   ├── OneUpCue.cs
+│   ├── WavPcm.cs
 │   └── EnemyPolicy.cs
 ├── Unity/                    Unity / 游戏 API 适配层
 │   ├── LevelHooks.cs
@@ -33,6 +37,7 @@ src/DeathRewind/
 │   ├── WorldRestorer.cs
 │   ├── MetaRestore.cs
 │   ├── InventoryPayload.cs
+│   ├── OneUpSound.cs
 │   └── ThumbnailCapture.cs
 ├── Harmony/                  Harmony 补丁
 │   ├── DeathInterceptor.cs
@@ -44,6 +49,9 @@ src/DeathRewind/
 │   ├── ClosurePanel.cs       原生 YOU DIED 界面注入
 │   ├── RewindIndicator.cs    HUD「1up」机会指示
 │   └── RewindPrompt.cs       IMGUI 降级裁决面板
+├── Audio/                    「1UP」提示音素材
+│   ├── 1_Up_sound.mp3        音源原始文件（不参与运行时）
+│   └── oneup.wav             16bit PCM WAV，内嵌进程序集（运行时用）
 ├── Config/ModConfig.cs       config.txt + 游戏内设置
 └── Compat/PrivateStateAccessor.cs  私有字段反射访问
 ```
@@ -61,6 +69,8 @@ src/DeathRewind/
 | `TimelineLayout` | 纯函数的时间轴几何（横条、节点、标签、拖拽吸附） | `Compute`、`NearestNode`、`TimelineLayout.Result` |
 | `RewindCandidate` | 结算界面的一个回溯候选节点（锚点 + 回溯年龄 + 缩略图） | `RewindCandidate` |
 | `EnemyPolicy` | 敌人对象生命周期策略（纯逻辑）：只销毁 Mod 自己停用的对象；Boss 不可被回退移除 | `CanDestroy`、`CanRemoveLateSpawned` |
+| `OneUpCue` | 「1UP」提示音的触发判定（纯逻辑）：关卡开始后第一次出现回溯机会时响一次，每关一次 | `OnLevelStarted`、`OnLevelEnded`、`ShouldPlay` |
+| `WavPcm` | 16bit PCM WAV 解码（纯逻辑）：把内嵌音频还原成交错浮点采样 | `TryDecode` |
 | `LevelHooks` | 订阅关卡/子场景/场景卸载/局结束事件并归一化为三个回调（子场景回调带场景名） | `OnLevelStarted`、`OnSubSceneLoaded(string)`、`OnLevelEnded` |
 | `LevelAccess` | 安全读取游戏静态状态（主角色、相机、容器表、场景键、加载态） | `MainCharacter`、`MainCamera`、`LootBoxInventories`、`CurrentSceneKey`、`LevelReady`、`MultiSceneLoading` |
 | `EntitySampler` | 定期采样玩家/敌人/容器/门；维护敌人稳定 Id、角色根物体与死亡敌人登记；锚点覆盖关系；**只销毁 Mod 自己停用的敌人** | `Sample`、`RegisterDeadEnemy`、`GetEnemyHealth`、`GetEnemyObject`、`GetEnemyRoot`、`IsBossEnemy`、`MarkDeferredDestroy`、`UnregisterFromDistanceStreaming`、`ReleaseAnchor`、`SetAnchorCoverage`、`ResetRegistry`、`RefreshRegistry` |
@@ -70,6 +80,7 @@ src/DeathRewind/
 | `MetaRestore` | 主存档原子覆盖 + `SavesSystem.SetFile` 触发元系统重载；回退前备份 | `OverwriteFrom`、`BackupCurrent` |
 | `InventoryPayload` | 背包与装备槽载荷的采集/解析/原地还原 | `Capture`、`Parse`、`ApplyAsync`、`CaptureItem`、`InstantiateItemAsync`、`CaptureSlots`、`ApplySlotsAsync`、`VerifyRoundTrip` |
 | `ThumbnailCapture` | 锚点构建同帧抓屏 → 缩放 → PNG | `Capture` |
+| `OneUpSound` | 「1UP」提示音播放：内嵌 WAV → `AudioClip` → `AudioSource.PlayOneShot`（2D） | `Play`、`Dispose` |
 | `DeathInterceptor` | 死亡入口前缀拦截、裁决流程、恢复编排与复活后守卫 | `Install`、`OnDeathPrefix`、`DeathChoiceRoutine`、`RestoreRoutine`、`PostReviveFixup`、`PostReviveGuard`、`AcceptDeath`、`ScheduleReplay` |
 | `EnemyPersistencePatch` | 阻止死亡敌人 `Health.DestroyOnDelay` 销毁 | `Health.DestroyOnDelay` 前缀 |
 | `EnemyLootboxPatch` | 阻止敌人死亡时装备被搬进尸体箱 | `InteractableLootbox.CreateFromItem` 前缀 |
@@ -289,6 +300,8 @@ sequenceDiagram
 | `debugAutoDeathAfter` | `0` | 进关 N 秒后自动致死（仅 debugMode） |
 | `anchorCaptureBatchSize` | `2` | 单帧最多采集容器数 |
 | `anchorCaptureBudgetMs` | `2` | 单帧采集时间预算（毫秒） |
+| `oneUpSound` | `true` | 是否播放「1UP」提示音（进关拿到回溯机会时响一次） |
+| `oneUpSoundVolume` | `1` | 「1UP」提示音音量（0~1，越界自动收窄） |
 
 固定约束：`MaxRewinds = 1`（每关只能复活回溯一次），不从 config.txt 读取，也不在游戏内设置中暴露。
 
@@ -316,6 +329,8 @@ sequenceDiagram
 ### 9.2 HUD 指示
 
 `RewindIndicator`：硬币「1up」图标挂在 `HUDCanvas` 的 Buffs 状态栏首位，随原生竖向布局组排版；`RewindCount < MaxRewinds` 时显示，机会用掉后隐藏，关卡重置后恢复。
+
+配套「1UP」提示音：进入关卡、拿到回溯机会的那一刻响一次（`OneUpCue` 判定，每关一次；主菜单不响、换关卡才再响）。音频以 16bit PCM WAV 内嵌进程序集（`Audio/oneup.wav`），运行时由 `WavPcm` 解码、`OneUpSound` 用 Unity `AudioSource` 2D 播放——不走游戏的 FMOD 管线（FMOD 只能播 bank 里的事件，塞不进自定义音频）。
 
 ### 9.3 IMGUI 降级
 
@@ -370,3 +385,7 @@ bash tools/build.sh
 20. **回溯目标只要属于当前关卡即可**：跨**空间**（同一关卡的不同区域）允许，由 `PhaseTransfer` 传送过去；只有跨**关卡**（换地图）才取消回溯。曾经的"目标场景必须等于当前场景"判据会让跨空间候选一律被取消 → 界面表现为"没有回溯能力"。
 21. **跨空间回溯只还原"玩家 + 可还原的世界状态"**：跨空间时用 `MultiSceneCore.LoadAndTeleport(sceneID, 锚点坐标)` 送玩家进目标空间（该接口会黑屏 + 加载子场景，传送前必须恢复 `timeScale`，否则黑屏动画用 scaled 时间会卡住）。目标空间必须是**本关卡**的空间清单内项（换地图=换关卡，不回溯）。
 22. **可破坏物（爆炸桶、木箱、障碍）不是敌人**：它们同样带 `Health` 组件，但炸毁后必须保持炸毁状态——绝不能进入锚点差量表被回退"复活"（玩家会看到桶凭空复原）。判据见 `EnemyPolicy.IsEnemy`：有角色或有 AI 控制器才算敌人。
+23. **敌人注册表的四张表必须同步维护**（`EntitySampler`）：`_enemyIds`(Health→id) / `_enemyObjects`(GO→id) / `_idToHealth`(id→Health) / `_idToObjects`(id→GO)。新增或移除敌人时四处都要同步；`ResetRegistry` 要一并 `Clear` 新增的两张表（否则跨关卡残留上一关的对象引用）。`_idToObjects` 与 `_enemyObjects` 互为镜像，`_idToHealth` 与 `_enemyIds` 互为镜像——`EvictStale` 只清前者不后者是有意的（`_enemyIds` 保留 Health 供复活查找）。
+24. **实时状态里的敌人条目只能在该敌人 `Health` 确实被游戏销毁时移除**（`EntitySampler.RemoveEntry` → `LiveStateStore.RemoveEnemy`）。**禁止**按"登记超时"等超龄条件移除——还活着的敌人若被提前移出 store，就不在回退差量的 ids 集合（ids = `anchor.Enemies` ∪ `store.EnemyKeys`）里，回退时会**逃过差量表、残留在这个世界里**。注意 `EvictStale` 按超龄淘汰时**不得**调用 `RemoveEnemy`。
+25. **敌人相关查询必须走字典，不能线性扫描注册表**：`FindHealthById` / `GetEnemyObject` / `GetEnemyId` / `GetEnemyAi` / `GetEnemyReceiver` 都在 full 模式的锚点构建与回退差量循环里按敌人逐个调用，线性扫描会退化成 O(n²)（每 5 秒一次锚点构建，长单局必然卡顿）。
+26. **「1UP」提示音的音频必须内嵌 + 自行解码**：mp3 只有 Unity 的导入管线或 `UnityWebRequest` 能解，Mod 目录既不是 Unity 工程也不保证可读 → 构建期转成 16bit PCM WAV 内嵌进程序集，运行时用 `WavPcm` 逐 chunk 解析（转换产物在 `fmt` 与 `data` 之间会夹 `FLER` 等附属 chunk，固定偏移解析会读错）。触发判定放在纯逻辑 `OneUpCue` 里（关卡生命周期武装），**不要**直接跟着 HUD 指示器可见性走——主菜单里 `RewindCount < MaxRewinds` 恒成立，会在进游戏前就响。

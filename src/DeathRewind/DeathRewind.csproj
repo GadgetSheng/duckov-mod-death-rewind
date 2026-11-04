@@ -19,6 +19,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 「1UP」提示音：源文件 Audio/1_Up_sound.mp3，构建期转成 16bit PCM WAV（Audio/oneup.wav）
+         后内嵌进程序集 —— 运行时零文件 IO，也不依赖 Mod 目录里的外部音频文件。 -->
+    <EmbeddedResource Include="Audio/oneup.wav" LogicalName="DeathRewind.Audio.oneup.wav" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="0Harmony">
       <HintPath>$(MSBuildThisFileDirectory)../../vendor/0Harmony.dll</HintPath>
       <Private>false</Private>
@@ -88,6 +94,10 @@
     </Reference>
     <Reference Include="UnityEngine.ScreenCaptureModule">
       <HintPath>$(DuckovManagedDir)/UnityEngine.ScreenCaptureModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(DuckovManagedDir)/UnityEngine.AudioModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

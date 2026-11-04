@@ -18,6 +18,8 @@ namespace DeathRewind
         private RewindClock _clock;
         private AnchorRing _ring;
         private LiveStateStore _store = new LiveStateStore();
+        /// <summary>「1UP」提示音的触发判定（纯逻辑，见 Core/OneUpCue）。</summary>
+        private readonly OneUpCue _oneUpCue = new OneUpCue();
         private LevelHooks _hooks;
         private EntitySampler _sampler;
         private AnchorBuilder _builder;
@@ -144,6 +146,8 @@ namespace DeathRewind
             ModConfigBridge.AddBool("autoRewind", "死亡后自动回溯（无人值守测试）", _config.AutoRewind);
             ModConfigBridge.AddBool("debugMode", "调试模式", _config.DebugMode);
             ModConfigBridge.AddBool("logVerbose", "详细日志", _config.LogVerbose);
+            ModConfigBridge.AddBool("oneUpSound", "1UP 提示音", _config.OneUpSound);
+            ModConfigBridge.AddSlider("oneUpSoundVolume", "1UP 提示音音量", typeof(float), (float)_config.OneUpSoundVolume, new Vector2(0f, 1f));
             ModConfigBridge.AddOptionsChanged(OnModConfigOptionChanged);
         }
 
@@ -162,6 +166,7 @@ namespace DeathRewind
             DeathInterceptor.Uninstall();
             EnemyPersistencePatch.Uninstall();
             RewindIndicator.Dispose();
+            OneUpSound.Dispose();
             _hooks?.Uninstall();
             ModLog.Log("[DeathRewind] deactivated");
         }
@@ -302,6 +307,15 @@ namespace DeathRewind
                 && !LevelAccess.InBaseLevel;
             RewindIndicator.SetAvailable(shouldShow);
 
+            // 「1UP」提示音：每关第一次出现回溯机会时响一次（与 HUD 硬币指示同一判定）。
+            // 关卡生命周期武装/解除（见 HandleLevelStarted / HandleLevelEnded），
+            // 因此主菜单里不会响、换关卡才会再响。
+            bool oneUpCue = _oneUpCue.ShouldPlay(shouldShow);
+            if (oneUpCue && _config.OneUpSound)
+            {
+                OneUpSound.Play((float)_config.OneUpSoundVolume);
+            }
+
             HandleDebugHotkeys();
         }
 
@@ -325,6 +339,7 @@ namespace DeathRewind
             _lastSceneKey = null;
             _levelStartAnchors.Clear();
             _scenesWithStartAnchor.Clear();
+            _oneUpCue.OnLevelStarted();   // 武装本关的「1UP」提示音
             // 换关卡：玩家会被送到新地图的出生点 → 坐标稳定性重新计时
             _hasLastPlayerPos = false;
             _playerStable = false;
@@ -354,6 +369,7 @@ namespace DeathRewind
             _sampler.DestroyAllTrackedEnemies();
             _sampler.ResetRegistry();
             AnchorBuilder.DeleteAllAnchorFiles();
+            _oneUpCue.OnLevelEnded();     // 解除武装，等下一关开始
             ModLog.Log("[DeathRewind] level ended: state cleared");
         }
 

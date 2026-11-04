@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>死亡回溯 (DeathRewind) - 逃离鸭科夫 Mod</title>
+    <style>
+        :root {
+            --bg-color: #0d0d0d;
+            --text-main: #e0e0e0;
+            --text-muted: #888888;
+            --accent: #e8c14a;
+            --accent-dim: #8f6f1c;
+            --accent-glow: rgba(232, 193, 74, 0.35);
+            --on-accent: #1a1405;
+            --value-color: #7ee2b8;
+            --border-color: #333333;
+            --card-bg: #141414;
+            --code-bg: #000000;
+            --nav-bg: rgba(13, 13, 13, 0.95);
+            --font-display: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --transition-speed: 0.3s;
+        }
+
+        /* 亮色主题变量 */
+        html[data-theme="light"] {
+            --bg-color: #f0f0f0;
+            --text-main: #222222;
+            --text-muted: #555555;
+            --accent: #9a7412;
+            --accent-dim: #6d510b;
+            --accent-glow: rgba(154, 116, 18, 0.3);
+            --on-accent: #ffffff;
+            --value-color: #0f7a52;
+            --border-color: #d0d0d0;
+            --card-bg: #ffffff;
+            --code-bg: #e8e8e8;
+            --nav-bg: rgba(240, 240, 240, 0.95);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-display);
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            transition: background-color var(--transition-speed), color var(--transition-speed);
+            overflow-x: hidden;
+        }
+
+        /* 通用工具类 */
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 48px;
+        }
+
+        .text-center { text-align: center; }
+        .text-accent { color: var(--accent); }
+        .text-muted { color: var(--text-muted); }
+        .hidden { display: none !important; }
+
+        /* 行内代码：允许长路径换行，避免窄屏横向溢出 */
+        code {
+            font-family: 'Consolas', 'SFMono-Regular', Menlo, monospace;
+            font-size: 0.9em;
+            background: var(--code-bg);
+            padding: 2px 5px;
+            border-radius: 3px;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        /* 导航条 */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            background: var(--nav-bg);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 0;
+            z-index: 1000;
+            transition: all var(--transition-speed);
+        }
+
+        .nav-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-brand {
+            font-weight: 700;
+            font-size: 1.2rem;
+            letter-spacing: 1px;
+            cursor: pointer;
+            color: var(--text-main);
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 20px;
+        }
+
+        .nav-item {
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: var(--text-main);
+            text-decoration: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            transition: color 0.2s;
+        }
+
+        .nav-item:hover {
+            color: var(--accent);
+        }
+
+        .theme-toggle {
+            cursor: pointer;
+            font-size: 1.2rem;
+        }
+
+        /* Hero 区域 */
+        .hero {
+            padding: 100px 0 60px;
+            position: relative;
+        }
+
+        .hero h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .hero .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            margin-bottom: 30px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 10px 25px;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background-color: var(--accent);
+            color: var(--on-accent);
+            border: 1px solid var(--accent);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-dim);
+            border-color: var(--accent);
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--text-muted);
+        }
+
+        .version-tag {
+            display: inline-block;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+
+        /* 预览图容器 */
+        .preview-container {
+            width: 100%;
+            max-width: 420px;
+            margin: 30px auto;
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            aspect-ratio: 1/1;
+            background: #000;
+        }
+
+        .preview-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            opacity: 0.9;
+        }
+
+        /* 通用区块 */
+        .section {
+            padding: 60px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .section-title {
+            font-size: 1.8rem;
+            margin-bottom: 30px;
+            position: relative;
+            padding-bottom: 15px;
+        }
+
+        .section-title::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 60px;
+            height: 3px;
+            background: var(--accent);
+        }
+
+        /* 特色卡片 */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 25px;
+            border-radius: 6px;
+            transition: transform 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent);
+        }
+
+        .card h3 {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+            color: var(--accent);
+        }
+
+        .card p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        /* 教程步骤 */
+        .steps-list {
+            counter-reset: step;
+            list-style: none;
+            padding: 0;
+        }
+
+        .steps-list li {
+            position: relative;
+            padding-left: 50px;
+            margin-bottom: 25px;
+        }
+
+        .steps-list li::before {
+            counter-increment: step;
+            content: counter(step);
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 30px;
+            height: 30px;
+            background: var(--accent);
+            color: var(--on-accent);
+            border-radius: 50%;
+            text-align: center;
+            font-weight: bold;
+            font-size: 0.9rem;
+            line-height: 30px;
+        }
+
+        .step-content h4 {
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        .step-content p {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+        }
+
+        /* 对比表 */
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+        }
+
+        .comparison-table th, .comparison-table td {
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            text-align: left;
+        }
+
+        .comparison-table th {
+            background: var(--card-bg);
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .comparison-table td {
+            background: var(--bg-color);
+            color: var(--text-muted);
+        }
+
+        /* 配置表 */
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        .config-table th {
+            text-align: left;
+            padding: 10px;
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .config-table td {
+            padding: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .config-key {
+            font-family: 'Consolas', monospace;
+            color: var(--accent);
+        }
+
+        .config-val {
+            font-family: 'Consolas', monospace;
+            color: var(--value-color);
+            width: 80px;
+        }
+
+        /* FAQ */
+        details {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        summary {
+            padding: 15px;
+            cursor: pointer;
+            font-weight: 600;
+            list-style: none; /* 隐藏默认三角 */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        summary::after {
+            content: '+';
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        details[open] summary::after {
+            content: '-';
+        }
+
+        details[open] summary {
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .faq-content {
+            padding: 15px 15px 20px 15px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        /* 更新日志 */
+        .changelog-item {
+            margin-bottom: 20px;
+            padding-left: 15px;
+            border-left: 3px solid var(--accent);
+        }
+
+        .changelog-date {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 5px;
+            font-style: italic;
+        }
+
+        .changelog-title {
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        /* Footer */
+        footer {
+            padding: 40px 0 20px;
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+            margin-top: 40px;
+        }
+
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        footer .author {
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+
+        /* 响应式适配 */
+        @media (max-width: 768px) {
+            .container { padding: 0 24px; }
+            .hero { padding: 90px 0 40px; }
+            .hero h1 { font-size: 1.8rem; }
+            .hero-buttons { flex-direction: column; align-items: stretch; }
+            .features-grid { grid-template-columns: 1fr; }
+            .preview-container { aspect-ratio: 1/1; max-width: 320px; }
+            .section { padding: 44px 0; }
+            .section-title { font-size: 1.4rem; }
+            .comparison-table, .config-table { font-size: 0.78rem; }
+            .comparison-table th, .comparison-table td { padding: 8px; }
+            .config-table td, .config-table th { padding: 8px 6px; }
+            .config-val { width: auto; }
+            .navbar { padding: 10px 0; }
+            .nav-content { flex-wrap: wrap; gap: 8px; }
+            /* 移动端导航链接改为横向可滚动，保留锚点可达性 */
+            .nav-links {
+                order: 3;
+                width: 100%;
+                overflow-x: auto;
+                gap: 14px;
+                padding-bottom: 4px;
+                scrollbar-width: none;
+            }
+            .nav-links::-webkit-scrollbar { display: none; }
+            .nav-item { white-space: nowrap; padding: 4px 6px; font-size: 0.85rem; }
+            .nav-brand { font-size: 1rem; }
+        }
+
+        /* 动画关键帧 */
+        @keyframes glitch {
+            0% { transform: translate(0); }
+            20% { transform: translate(-2px, 2px); }
+            40% { transform: translate(2px, -2px); }
+            60% { transform: translate(-2px, -2px); }
+            80% { transform: translate(2px, 2px); }
+            100% { transform: translate(0); }
+        }
+
+        .glitch-hover:hover {
+            animation: glitch 0.3s cubic-bezier(.25, .46, .45, .94) both;
+            color: var(--accent);
+            text-shadow: 2px 2px 0px rgba(0,0,0,0.5);
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- 顶部导航 -->
+    <nav class="navbar">
+        <div class="container nav-content">
+            <a class="nav-brand" href="#hero">DEATH REWIND</a>
+            <div class="nav-links">
+                <a class="nav-item" href="#hero">首页</a>
+                <a class="nav-item" href="#features">特色</a>
+                <a class="nav-item" href="#howto">玩法</a>
+                <a class="nav-item" href="#install">安装</a>
+                <a class="nav-item" href="#config">配置</a>
+                <a class="nav-item" href="#faq">常见问题</a>
+                <a class="nav-item" href="#changelog">更新日志</a>
+            </div>
+            <div class="theme-toggle" onclick="toggleTheme()">☀/☾</div>
+        </div>
+    </nav>
+
+    <!-- 首页 Hero -->
+    <header id="hero" class="section hero">
+        <div class="container">
+            <div class="version-tag">v1.0.11</div>
+            <h1 class="text-center" style="margin-top: 20px;">死亡回溯 <span class="text-accent">DeathRewind</span></h1>
+            <p class="subtitle">
+                逃离鸭科夫的终极救星。<br>
+                死过一次？没关系。<br>
+                回到 60 秒前的那个节点，重整旗鼓。
+            </p>
+            
+            <div class="hero-buttons">
+                <a href="#install" class="btn btn-primary">立即安装</a>
+                <a href="#config" class="btn btn-secondary">配置指南</a>
+            </div>
+            
+            <div class="preview-container">
+                <!-- 相对路径引用，失败时显示黑色占位 -->
+                <img src="../src/DeathRewind/preview.png" alt="DeathRewind Preview" class="preview-img" onerror="this.style.display='none'; this.parentNode.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100%;background:#000;color:#333;font-size:2rem; font-family:monospace\'>PREVIEW</div>';">
+            </div>
+        </div>
+    </header>
+
+    <!-- 特色卡片 -->
+    <section id="features" class="section">
+        <div class="container">
+            <h2 class="section-title">核心特性</h2>
+        </div>
+        <div class="container features-grid">
+            <div class="card">
+                <h3>死亡回溯</h3>
+                <p>死亡时在原生结算界面获得一次回溯机会，回到约 60 秒前的位置。</p>
+            </div>
+            <div class="card">
+                <h3>时间轴节点</h3>
+                <p>结算界面时间轴提供 60 / 50 / 40 / 30 秒四个节点，默认选中 60 秒（最老节点）。节点标签只标秒数，跨空间时回溯按钮会补上空间名。</p>
+            </div>
+            <div class="card">
+                <h3>跨空间回溯</h3>
+                <p>神秘山洞、仓库区地道等独立空间内也能回溯，还能跨空间回到主地图的老位置。</p>
+            </div>
+            <div class="card">
+                <h3>1UP 提示</h3>
+                <p>HUD Buffs 状态栏首位显示硬币形状「1up」图标，提示你还有一次机会；用掉后隐藏，关卡重置后恢复。进关拿到机会的那一刻还会响一次「1UP」提示音（每关一次，可关闭或调音量）。</p>
+            </div>
+            <div class="card">
+                <h3>世界默认不回滚</h3>
+                <p>默认 position 模式只回玩家位置、朝向、血量；敌人、箱子、爆炸桶不跟着回滚。想要完整世界回滚可切到 full。</p>
+            </div>
+            <div class="card">
+                <h3>换地图才清空</h3>
+                <p>在独立空间之间切换不会清空锚点，换地图（换关卡）才清空重来。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 玩法教程 -->
+    <section id="howto" class="section">
+        <div class="container">
+            <h2 class="section-title">怎么使用</h2>
+        </div>
+        <div class="container">
+            <ol class="steps-list">
+                <li>
+                    <div class="step-content">
+                        <h4>1. 遭遇死亡</h4>
+                        <p>在战斗中阵亡，游戏会弹出原生的 YOU DIED 结算界面。</p>
+                    </div>
+                </li>
+                <li>
+                    <div class="step-content">
+                        <h4>2. 选择回溯节点</h4>
+                        <p>原生「继续」按钮下方会多出一个回溯按钮，旁边是回溯时间轴。按下或拖动时间轴会吸附到最近的节点（60 / 50 / 40 / 30 秒），默认选中 60 秒前那个最老的节点；选中节点时预览画面与实际回溯目标同步切换。</p>
+                    </div>
+                </li>
+                <li>
+                    <div class="step-content">
+                        <h4>3. 确认回溯</h4>
+                        <p>点击回溯按钮即在所选节点复活；点原生「继续」则接受这次死亡。机会用掉后再次死亡就没有回溯按钮了（除非开启 <code>autoRewind</code>）。</p>
+                    </div>
+                </li>
+                <li>
+                    <div class="step-content">
+                        <h4>4. 继续战斗</h4>
+                        <p>带着旧的位置与朝向回来，血量回到锚点时刻的血量（不低于最大血量的一半）。HUD 上的「1up」硬币会同时消失，本关不再有第二次机会。</p>
+                    </div>
+                </li>
+            </ol>
+        </div>
+    </section>
+
+    <!-- 安装 -->
+    <section id="install" class="section">
+        <div class="container">
+            <h2 class="section-title">安装</h2>
+        </div>
+        <div class="container">
+            <div class="card" style="margin-bottom: 20px;">
+                <h3>方式一：Steam 创意工坊（推荐）</h3>
+                <p>
+                    在 Steam 创意工坊搜索「死亡回溯 / DeathRewind」订阅即可（File ID: <code>3823953866</code>）。
+                    游戏自带原生 Mod 加载器，订阅后重启游戏即生效，无需手动放置文件。
+                </p>
+            </div>
+            <div class="card">
+                <h3>方式二：手动安装</h3>
+                <p>把下列文件放进游戏目录的 Mods 文件夹下（每个 Mod 一个子目录）：</p>
+                <p style="margin: 12px 0;">
+                    <code>Duckov.app/Contents/Mods/DeathRewind/</code>
+                </p>
+                <ul style="padding-left: 20px; color: var(--text-muted); font-size: 0.9rem;">
+                    <li><code>DeathRewind.dll</code> —— Mod 主程序集</li>
+                    <li><code>info.ini</code> —— Mod 元信息（名称、版本、标签）</li>
+                    <li><code>0Harmony.dll</code> —— Harmony 2.x 运行库</li>
+                    <li><code>preview.png</code> —— 预览图（可选）</li>
+                </ul>
+                <p style="margin-top: 12px;">
+                    要求：游戏为支持原生 Mod 加载的版本，Harmony 2.x。Mod 以 <code>net472</code> 为目标框架，Unity Mono 运行时。
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 还原内容对比 -->
+    <section id="restore" class="section">
+        <div class="container">
+            <h2 class="section-title">还原了什么？</h2>
+        </div>
+        <div class="container">
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>状态类型</th>
+                        <th>position（默认）</th>
+                        <th>full</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>玩家位置</td>
+                        <td class="text-accent">✓ 还原</td>
+                        <td class="text-accent">✓ 还原</td>
+                    </tr>
+                    <tr>
+                        <td>玩家朝向</td>
+                        <td class="text-accent">✓ 还原</td>
+                        <td class="text-accent">✓ 还原</td>
+                    </tr>
+                    <tr>
+                        <td>玩家血量</td>
+                        <td class="text-accent">✓ 还原</td>
+                        <td class="text-accent">✓ 还原</td>
+                    </tr>
+                    <tr>
+                        <td>玩家背包 / 装备槽</td>
+                        <td>✗ 不还原</td>
+                        <td class="text-accent">✓ 还原</td>
+                    </tr>
+                    <tr>
+                        <td>敌人位置与血量</td>
+                        <td>✗ 不回滚</td>
+                        <td class="text-accent">✓ 还原</td>
+                    </tr>
+                    <tr>
+                        <td>Boss（零号区·矮鸭等）</td>
+                        <td>✗ 不回滚</td>
+                        <td>保留原地，不会消失</td>
+                    </tr>
+                    <tr>
+                        <td>容器 / 战利品箱内容</td>
+                        <td>✗ 不回滚</td>
+                        <td class="text-accent">✓ 还原</td>
+                    </tr>
+                    <tr>
+                        <td>门 / 世界时间</td>
+                        <td>✗ 不回滚</td>
+                        <td class="text-accent">✓ 还原</td>
+                    </tr>
+                    <tr>
+                        <td>爆炸桶等可破坏物</td>
+                        <td>✗ 不回滚</td>
+                        <td>✗ 不回滚（炸毁状态保持）</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="text-muted" style="margin-top: 12px;">
+                默认的 <code>position</code> 模式只动你自己；<code>full</code> 模式才会连世界一起回滚，代价是每个锚点都多存一份主存档副本（约 1.3MB）。
+            </p>
+        </div>
+    </section>
+
+    <!-- 配置说明 -->
+    <section id="config" class="section">
+        <div class="container">
+            <h2 class="section-title">配置指南 (config.txt)</h2>
+        </div>
+        <div class="container">
+            <p class="text-muted">
+                配置文件路径：<code>&lt;Application.dataPath&gt;/ModConfig/DeathRewind/config.txt</code><br>
+                游戏内 ModConfig 设置界面优先于文件。
+            </p>
+            <br>
+            <table class="config-table">
+                <tr>
+                    <th>参数名</th>
+                    <th>默认值</th>
+                    <th>说明</th>
+                </tr>
+                <tr>
+                    <td><span class="config-key">enabled</span></td>
+                    <td><span class="config-val">true</span></td>
+                    <td>Mod 总开关</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">anchorInterval</span></td>
+                    <td><span class="config-val">5</span></td>
+                    <td>锚点网格间隔（秒）</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">anchorCount</span></td>
+                    <td><span class="config-val">16</span></td>
+                    <td>每个空间的锚点配额</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">anchorCapacity</span></td>
+                    <td><span class="config-val">32</span></td>
+                    <td>锚点总数上限</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">maxRewindAge</span></td>
+                    <td><span class="config-val">60</span></td>
+                    <td>回溯窗口上限（秒），时间轴最老的节点</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">timelineStep</span></td>
+                    <td><span class="config-val">10</span></td>
+                    <td>时间轴节点间隔（秒）</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">sampleInterval</span></td>
+                    <td><span class="config-val">0.25</span></td>
+                    <td>实时状态采样间隔（秒）</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">rewindScope</span></td>
+                    <td><span class="config-val">position</span></td>
+                    <td>回溯范围：<br>position: 只回玩家位置<br>full: 完整世界回滚</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">autoRewind</span></td>
+                    <td><span class="config-val">false</span></td>
+                    <td>无人值守，死后自动回溯不弹界面</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">rewindHotkey</span></td>
+                    <td><span class="config-val">F9</span></td>
+                    <td>回溯快捷键</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">continueHotkey</span></td>
+                    <td><span class="config-val">Escape</span></td>
+                    <td>接受死亡快捷键</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">debugMode</span></td>
+                    <td><span class="config-val">false</span></td>
+                    <td>调试热键等</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">logVerbose</span></td>
+                    <td><span class="config-val">false</span></td>
+                    <td>详细诊断日志</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">forceFailPhase</span></td>
+                    <td><span class="config-val">""</span></td>
+                    <td>指定恢复阶段强制失败，用于调试，如 "E"</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">debugAutoDeathAfter</span></td>
+                    <td><span class="config-val">0</span></td>
+                    <td>进关 N 秒后自动致死，仅 debugMode 生效；0 = 关闭</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">anchorCaptureBatchSize</span></td>
+                    <td><span class="config-val">2</span></td>
+                    <td>锚点采集时单帧最多处理的容器数</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">anchorCaptureBudgetMs</span></td>
+                    <td><span class="config-val">2</span></td>
+                    <td>锚点采集单帧时间预算（毫秒）</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">oneUpSound</span></td>
+                    <td><span class="config-val">true</span></td>
+                    <td>进关拿到回溯机会时是否响「1UP」提示音</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">oneUpSoundVolume</span></td>
+                    <td><span class="config-val">1</span></td>
+                    <td>「1UP」提示音音量（0~1）</td>
+                </tr>
+                <tr>
+                    <td><span class="config-key">MaxRewinds</span></td>
+                    <td><span class="config-val">1</span></td>
+                    <td>每关只能复活回溯一次（不可配置）</td>
+                </tr>
+            </table>
+        </div>
+    </section>
+
+    <!-- 常见问题 FAQ -->
+    <section id="faq" class="section">
+        <div class="container">
+            <h2 class="section-title">常见问题 (FAQ)</h2>
+        </div>
+        <div class="container">
+            <details>
+                <summary>时间轴节点数与实际可回溯目标不一致怎么办？</summary>
+                <div class="faq-content">
+                    时间轴上的节点数取决于当前关卡里实际攒下的锚点，可能少于四个。当前空间找不到匹配节点时，会用本关卡其它空间的锚点补位（跨空间时回溯按钮会标注空间名）。
+                </div>
+            </details>
+            <details>
+                <summary>换地图（进新关卡）后锚点会清空吗？</summary>
+                <div class="faq-content">
+                    是的。换地图（进入新关卡）会清空所有锚点，不能跨关卡回溯。锚点只在当前关卡内有效；但在神秘山洞、仓库区地道这类独立空间之间切换不会清空。
+                </div>
+            </details>
+            <details>
+                <summary>回溯只还原玩家自身状态吗？</summary>
+                <div class="faq-content">
+                    默认的 <code>position</code> 模式是。回溯只还原玩家位置、朝向、血量；世界里的敌人、箱子、已经炸掉的爆炸桶不跟着回滚。想连世界一起回滚可改用 <code>rewindScope=full</code>。
+                </div>
+            </details>
+            <details>
+                <summary>开启 rewindScope=full 有什么影响？</summary>
+                <div class="faq-content">
+                    完整世界回滚会增加存档负担：每个锚点都会存一份主存档副本，约 1.3MB/锚点。请谨慎设置 <code>anchorCapacity</code>，避免存档过大。
+                </div>
+            </details>
+            <details>
+                <summary>进图时间不足 60 秒会回溯到哪？</summary>
+                <div class="faq-content">
+                    会回到你进图那一刻的位置。锚点是从进入场景开始记录的，所以时间不够时，最早的可用锚点就是入图点。
+                </div>
+            </details>
+            <details>
+                <summary>快捷键是什么？</summary>
+                <div class="faq-content">
+                    <code>F9</code> 回溯、<code>Escape</code> 接受死亡。这两个热键用于原生结算界面不可用时的 IMGUI 降级面板。
+                </div>
+            </details>
+        </div>
+    </section>
+
+    <!-- 更新日志 -->
+    <section id="changelog" class="section">
+        <div class="container">
+            <h2 class="section-title">更新日志</h2>
+        </div>
+        <div class="container">
+            <div class="changelog-item">
+                <div class="changelog-date">v1.0.11</div>
+                <div class="changelog-title">「1UP」提示音</div>
+                <ul style="padding-left: 20px; font-size: 0.9rem; color: var(--text-muted);">
+                    <li>进入关卡、拿到回溯机会的那一刻响一次「1UP」提示音（每关一次）。</li>
+                    <li>可在游戏内设置或 config.txt 里关闭 / 调音量（<code>oneUpSound</code>、<code>oneUpSoundVolume</code>）。</li>
+                </ul>
+            </div>
+            <div class="changelog-item">
+                <div class="changelog-date">v1.0.10</div>
+                <div class="changelog-title">发布版本</div>
+            </div>
+            <div class="changelog-item">
+                <div class="changelog-date">v1.0.5 ~ v1.0.10</div>
+                <div class="changelog-title">主要更新与修复</div>
+                <ul style="padding-left: 20px; font-size: 0.9rem; color: var(--text-muted);">
+                    <li><strong>修复：</strong>在山洞、地道等独立空间里死亡时结算界面没有回溯按钮（跨空间回溯候选被"跨地图保护"误杀）。</li>
+                    <li><strong>新增：</strong>跨空间回溯——在山洞、地道等独立空间内死亡时，时间轴会列出本关卡其它空间的回溯点（时间轴只标秒数，跨空间时按钮标注空间名），可选中回到那边。</li>
+                    <li><strong>新增：</strong>支持在独立空间（神秘山洞、仓库区地道等）内回溯——切换空间不再清空锚点，换地图才清空。</li>
+                    <li><strong>调整：</strong>回溯时间轴改为固定四个节点——从最老（默认 60 秒）向内每 10 秒一个，即 60/50/40/30 秒可选，默认选中 60 秒。</li>
+                    <li><strong>修复：</strong>已炸毁的桶（可破坏物）被回退还原——可破坏物不再当作敌人进入回退差量表，炸毁状态保持不变。</li>
+                    <li><strong>修复：</strong>Boss（零号区·矮鸭等）可能永久消失——Mod 不再销毁游戏自己停用的敌人，完整回退也不再删除 Boss。</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer>
+        <div class="container">
+            <p>Mod 链接：<a href="https://steamcommunity.com/workshop/filedetails/?id=3823953866">Steam Workshop (File ID: 3823953866)</a></p>
+            <div class="author">
+                <p>作者：萌新（AI 开发）</p>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-top:5px;">
+                    萌新做的第一款 mod，如遇 bug 欢迎留言。
+                </p>
+            </div>
+            <p style="margin-top: 20px; font-size: 0.7rem; opacity: 0.5;">
+                DeathRewind v1.0.11 · Unity Mono + Harmony 2.x · net472
+            </p>
+        </div>
+    </footer>
+
+    <!-- 脚本交互 -->
+    <script>
+        // 主题切换逻辑
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('deathrewind-theme', newTheme);
+        }
+
+        // 初始化主题
+        const savedTheme = localStorage.getItem('deathrewind-theme');
+        if (savedTheme) {
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+            document.documentElement.setAttribute('data-theme', 'light');
+        }
+
+        // 平滑滚动导航（顶部导航条是 fixed，需要留出偏移）
+        document.querySelectorAll('a[href^="#"]').forEach(function (link) {
+            link.addEventListener('click', function (event) {
+                const target = document.querySelector(link.getAttribute('href'));
+                if (!target) { return; }
+                event.preventDefault();
+                const offset = 70;
+                const top = target.getBoundingClientRect().top + window.pageYOffset - offset;
+                window.scrollTo({ top: top, behavior: 'smooth' });
+            });
+        });
+    </script>
+</body>
+</html>

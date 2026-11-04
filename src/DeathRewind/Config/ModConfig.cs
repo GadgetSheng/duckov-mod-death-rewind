@@ -40,6 +40,10 @@ namespace DeathRewind.Config
         public int AnchorCaptureBatchSize = 2;
         /// <summary>锚点采集的单帧时间预算（毫秒），超出即停到下一帧。</summary>
         public double AnchorCaptureBudgetMs = 2;
+        /// <summary>是否播放「1UP」提示音：每关第一次拿到回溯机会时响一次。</summary>
+        public bool OneUpSound = true;
+        /// <summary>「1UP」提示音音量（0~1）。</summary>
+        public double OneUpSoundVolume = 1.0;
 
         // macOS 实测：Application.dataPath = <app>/Contents（ModManager 扫描 <app>/Contents/Mods 可证），
         // 因此 Mod 配置目录是 <app>/Contents/ModConfig/<ModName>/（与游戏现有 ModConfig 目录一致）。
@@ -79,6 +83,8 @@ namespace DeathRewind.Config
                 cfg.DebugAutoDeathAfter = GetDouble(raw, "debugAutoDeathAfter", cfg.DebugAutoDeathAfter);
                 cfg.AnchorCaptureBatchSize = GetInt(raw, "anchorCaptureBatchSize", cfg.AnchorCaptureBatchSize);
                 cfg.AnchorCaptureBudgetMs = GetDouble(raw, "anchorCaptureBudgetMs", cfg.AnchorCaptureBudgetMs);
+                cfg.OneUpSound = GetBool(raw, "oneUpSound", cfg.OneUpSound);
+                cfg.OneUpSoundVolume = GetDouble(raw, "oneUpSoundVolume", cfg.OneUpSoundVolume);
             }
             // ModConfig 框架覆盖：游戏内设置界面保存的值优先于 config.txt（框架未装则原样通过）
             ApplyModConfigOverrides(cfg);
@@ -101,6 +107,8 @@ namespace DeathRewind.Config
             cfg.AutoRewind = ModConfigBridge.Load("autoRewind", cfg.AutoRewind);
             cfg.DebugMode = ModConfigBridge.Load("debugMode", cfg.DebugMode);
             cfg.LogVerbose = ModConfigBridge.Load("logVerbose", cfg.LogVerbose);
+            cfg.OneUpSound = ModConfigBridge.Load("oneUpSound", cfg.OneUpSound);
+            cfg.OneUpSoundVolume = ModConfigBridge.Load("oneUpSoundVolume", (float)cfg.OneUpSoundVolume);
         }
 
         /// <summary>游戏内设置变更后重新加载覆盖值并重新校验（ModBehaviour 的选项变更回调调用）。</summary>
@@ -122,6 +130,11 @@ namespace DeathRewind.Config
             if (SampleInterval <= 0) { ModLog.LogWarning("[DeathRewind] sampleInterval 非法，回落 0.25"); SampleInterval = 0.25; }
             if (AnchorCaptureBatchSize < 1) { ModLog.LogWarning("[DeathRewind] anchorCaptureBatchSize 非法，回落 2"); AnchorCaptureBatchSize = 2; }
             if (AnchorCaptureBudgetMs <= 0) { ModLog.LogWarning("[DeathRewind] anchorCaptureBudgetMs 非法，回落 2"); AnchorCaptureBudgetMs = 2; }
+            if (OneUpSoundVolume < 0 || OneUpSoundVolume > 1)
+            {
+                ModLog.LogWarning($"[DeathRewind] oneUpSoundVolume 非法（{OneUpSoundVolume}），收窄到 0~1");
+                OneUpSoundVolume = Math.Min(1, Math.Max(0, OneUpSoundVolume));
+            }
             if (!string.Equals(RewindScope, "position", System.StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(RewindScope, "full", System.StringComparison.OrdinalIgnoreCase))
             {
