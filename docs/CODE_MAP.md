@@ -27,6 +27,8 @@ src/DeathRewind/
 │   ├── DeathPanelLayout.cs
 │   ├── OneUpCue.cs
 │   ├── WavPcm.cs
+│   ├── ScoreState.cs
+│   ├── RewindCooldown.cs
 │   └── EnemyPolicy.cs
 ├── Unity/                    Unity / 游戏 API 适配层
 │   ├── LevelHooks.cs
@@ -48,7 +50,8 @@ src/DeathRewind/
 ├── UI/
 │   ├── ClosurePanel.cs       原生 YOU DIED 界面注入
 │   ├── RewindIndicator.cs    HUD「1up」机会指示
-│   └── RewindPrompt.cs       IMGUI 降级裁决面板
+│   ├── RewindPrompt.cs       IMGUI 降级裁决面板
+│   └── RewindSettingsPanel.cs 游戏内设置面板（Ctrl+I）
 ├── Audio/                    「1UP」提示音素材
 │   ├── 1_Up_sound.mp3        音源原始文件（不参与运行时）
 │   └── oneup.wav             16bit PCM WAV，内嵌进程序集（运行时用）
@@ -71,6 +74,8 @@ src/DeathRewind/
 | `EnemyPolicy` | 敌人对象生命周期策略（纯逻辑）：只销毁 Mod 自己停用的对象；Boss 不可被回退移除 | `CanDestroy`、`CanRemoveLateSpawned` |
 | `OneUpCue` | 「1UP」提示音的触发判定（纯逻辑）：关卡开始后第一次出现回溯机会时响一次，每关一次 | `OnLevelStarted`、`OnLevelEnded`、`ShouldPlay` |
 | `WavPcm` | 16bit PCM WAV 解码（纯逻辑）：把内嵌音频还原成交错浮点采样 | `TryDecode` |
+| `ScoreState` | 积分与 1UP 记账（纯逻辑）：BOSS 50 分 / 生物 5 分，满 100 分发 1UP 并清零，每关重算 | `ResetLevel`、`SetCap`、`AddKill`、`TryConsume` |
+| `RewindCooldown` | 复活冷却计时（纯逻辑）：用掉一次复活后开始计时，走有效 tick | `Start`、`Remaining`、`IsReady`、`SetDuration`、`Reset` |
 | `LevelHooks` | 订阅关卡/子场景/场景卸载/局结束事件并归一化为三个回调（子场景回调带场景名） | `OnLevelStarted`、`OnSubSceneLoaded(string)`、`OnLevelEnded` |
 | `LevelAccess` | 安全读取游戏静态状态（主角色、相机、容器表、场景键、加载态） | `MainCharacter`、`MainCamera`、`LootBoxInventories`、`CurrentSceneKey`、`LevelReady`、`MultiSceneLoading` |
 | `EntitySampler` | 定期采样玩家/敌人/容器/门；维护敌人稳定 Id、角色根物体与死亡敌人登记；锚点覆盖关系；**只销毁 Mod 自己停用的敌人** | `Sample`、`RegisterDeadEnemy`、`GetEnemyHealth`、`GetEnemyObject`、`GetEnemyRoot`、`IsBossEnemy`、`MarkDeferredDestroy`、`UnregisterFromDistanceStreaming`、`ReleaseAnchor`、`SetAnchorCoverage`、`ResetRegistry`、`RefreshRegistry` |
@@ -89,6 +94,7 @@ src/DeathRewind/
 | `ClosurePanel` | 在原生 YOU DIED 界面注入回溯按钮、提示文字、箭头、预览图与可拖拽时间轴 | `Create`、`SetRewindLabel`、`SelectedIndex`、`CandidateCount`、`NodeSelected`、`Layout`、`Dispose` |
 | `RewindIndicator` | HUD Buffs 状态栏首位的「1up」硬币指示 | `SetAvailable`、`Dispose` |
 | `RewindPrompt` | 原生结算界面不可用时的 IMGUI 降级面板 | `Open`、`Close`、`Draw` |
+| `RewindSettingsPanel` | 游戏内设置面板（Ctrl+I）：得分 / 1UP（删除线）/ 冷却倒计时 + 两项设置 | `Toggle`、`Close`、`Draw` |
 | `ModConfig` | config.txt 解析/校验 + 游戏内设置覆盖 + 调试开关 | `Load`、`Validate`、`FilePath` |
 | `PrivateStateAccessor` | 集中反射读写游戏私有字段，失败时降级 | `GetBool`、`SetBool`、`GetFloat`、`SetFloat`、`GetObject` |
 
@@ -302,8 +308,10 @@ sequenceDiagram
 | `anchorCaptureBudgetMs` | `2` | 单帧采集时间预算（毫秒） |
 | `oneUpSound` | `true` | 是否播放「1UP」提示音（进关拿到回溯机会时响一次） |
 | `oneUpSoundVolume` | `1` | 「1UP」提示音音量（0~1，越界自动收窄） |
+| `maxRewinds` | `1` | 每关 1UP 上限（1~3）：保底 1 次复活，额外次数靠击杀积分赚 |
+| `rewindCooldown` | `60` | 复活冷却间隔（秒）：30 / 60 / 90，非法回落 60 |
 
-固定约束：`MaxRewinds = 1`（每关只能复活回溯一次），不从 config.txt 读取，也不在游戏内设置中暴露。
+固定约束：`maxRewinds` 与 `rewindCooldown` **只走 config.txt + Ctrl+I 设置面板**，不进 ModConfig 框架（框架的 ES3 值会盖掉面板写入的结果）。
 
 ---
 
@@ -336,6 +344,17 @@ sequenceDiagram
 
 `RewindPrompt`：原生 `ClosureView` 不可用时显示标题/详情/回溯/继续，支持鼠标与热键。
 
+### 9.4 游戏内设置面板（Ctrl+I）
+
+`RewindSettingsPanel`（屏幕右上角 IMGUI 区域，不暂停游戏）：
+
+- **得分**：`当前 / 100`；1UP 已拿满时追加「（1UP 已满）」。
+- **1UP**：已用掉的逐个画**删除线**（`×1` 一个一个），剩余的显示 `×N UP`（没有则显示「无」）。
+- **冷却**：剩余秒数；就绪时显示「就绪」。
+- **每关 1UP 上限**：`1 / 2 / 3` 三个按钮。
+- **复活冷却（秒）**：`30 / 60 / 90` 三个按钮。
+- 改动立即生效并**写回 config.txt**（只改 `maxRewinds` / `rewindCooldown` 两行）。
+
 ---
 
 ## 10. 日志与发布开关
@@ -363,7 +382,7 @@ bash tools/build.sh
 
 ## 11. 设计红线与已知约束
 
-1. 每关只能复活回溯一次（`MaxRewinds = 1`）。
+1. 每关复活次数上限可配（`maxRewinds` 1~3，默认 1）：保底 1 次，额外次数靠击杀积分赚（满 100 分 +1UP 并清零）；用掉一次后进入冷却（`rewindCooldown` 30/60/90 秒）。
 2. 默认 `position` 模式：锚点纯内存、无磁盘 IO；`full` 模式才做世界回滚。
 3. 只在地图实际游玩场景建锚点；地道/楼层/室内子场景不回溯。
 4. 子场景有独立坐标原点，锚点必须按 `SceneKey` 过滤，跨场景坐标不可复用。
@@ -389,3 +408,5 @@ bash tools/build.sh
 24. **实时状态里的敌人条目只能在该敌人 `Health` 确实被游戏销毁时移除**（`EntitySampler.RemoveEntry` → `LiveStateStore.RemoveEnemy`）。**禁止**按"登记超时"等超龄条件移除——还活着的敌人若被提前移出 store，就不在回退差量的 ids 集合（ids = `anchor.Enemies` ∪ `store.EnemyKeys`）里，回退时会**逃过差量表、残留在这个世界里**。注意 `EvictStale` 按超龄淘汰时**不得**调用 `RemoveEnemy`。
 25. **敌人相关查询必须走字典，不能线性扫描注册表**：`FindHealthById` / `GetEnemyObject` / `GetEnemyId` / `GetEnemyAi` / `GetEnemyReceiver` 都在 full 模式的锚点构建与回退差量循环里按敌人逐个调用，线性扫描会退化成 O(n²)（每 5 秒一次锚点构建，长单局必然卡顿）。
 26. **「1UP」提示音的音频必须内嵌 + 自行解码**：mp3 只有 Unity 的导入管线或 `UnityWebRequest` 能解，Mod 目录既不是 Unity 工程也不保证可读 → 构建期转成 16bit PCM WAV 内嵌进程序集，运行时用 `WavPcm` 逐 chunk 解析（转换产物在 `fmt` 与 `data` 之间会夹 `FLER` 等附属 chunk，固定偏移解析会读错）。触发判定放在纯逻辑 `OneUpCue` 里（关卡生命周期武装），**不要**直接跟着 HUD 指示器可见性走——主菜单里 `RewindCount < MaxRewinds` 恒成立，会在进游戏前就响。
+27. **击杀积分只认"我们亲眼看见它死了"**：`EntitySampler` 靠采样时的「存活 → 死亡」跳变判定击杀，并按稳定 id 去重；**不要**在敌人被移出注册表（距离淘汰 / 对象销毁）时补记击杀——换场景时全场敌人一起销毁，会瞬间刷出一堆假 1UP。游戏没有可靠的"被玩家击杀"信号，环境造成的死亡同样计分。
+28. **多次复活必须让回溯窗口随使用次数扩展**：第一次回溯会丢弃更年轻的锚点，若窗口固定 60s，第二次回溯就没有可选目标 → 有效窗口 `maxRewindAge × (已用次数 + 1)`。实际能回溯多深仍受锚点环保留量限制（每空间 `anchorCount` × 间隔）。

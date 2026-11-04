@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using DeathRewind.Core;
 using UnityEngine;
 
 namespace DeathRewind.Config
@@ -19,8 +20,10 @@ namespace DeathRewind.Config
         public double MaxRewindAge = 60;
         /// <summary>时间轴节点间隔（秒）：从最老节点向内按此步长取点。默认 10 → 60/50/40/30 四个节点。</summary>
         public double TimelineStep = 10;
-        /// <summary>设计约束：每关只能复活回溯一次。固定为 1，不可通过 config.txt / 游戏内设置修改。</summary>
+        /// <summary>每关 1UP 上限（1~3）：保底 1 次复活，靠击杀积分可再赚。游戏内用 Ctrl+I 面板调整。</summary>
         public int MaxRewinds = 1;
+        /// <summary>复活冷却间隔（秒）：只能用 30 / 60 / 90。第一次复活不受冷却限制。</summary>
+        public int RewindCooldownSeconds = 60;
         public double SampleInterval = 0.25;
         public bool AutoRewind;
         public string RewindHotkey = "F9";
@@ -85,6 +88,8 @@ namespace DeathRewind.Config
                 cfg.AnchorCaptureBudgetMs = GetDouble(raw, "anchorCaptureBudgetMs", cfg.AnchorCaptureBudgetMs);
                 cfg.OneUpSound = GetBool(raw, "oneUpSound", cfg.OneUpSound);
                 cfg.OneUpSoundVolume = GetDouble(raw, "oneUpSoundVolume", cfg.OneUpSoundVolume);
+                cfg.MaxRewinds = GetInt(raw, "maxRewinds", cfg.MaxRewinds);
+                cfg.RewindCooldownSeconds = GetInt(raw, "rewindCooldown", cfg.RewindCooldownSeconds);
             }
             // ModConfig 框架覆盖：游戏内设置界面保存的值优先于 config.txt（框架未装则原样通过）
             ApplyModConfigOverrides(cfg);
@@ -118,6 +123,33 @@ namespace DeathRewind.Config
             Validate();
         }
 
+        /// <summary>
+        /// 把 Ctrl+I 面板改动的两项设置写回 config.txt（只改这两行，其余内容原样保留）。
+        /// 这两项**不进 ModConfig 框架**（游戏内设置面板），否则框架的 ES3 值会盖掉面板写入的结果。
+        /// </summary>
+        public static bool SavePanelSettings(int maxRewinds, int cooldownSeconds, out string error)
+        {
+            error = null;
+            try
+            {
+                var path = FilePath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+                var lines = new List<string>();
+                if (File.Exists(path)) lines.AddRange(File.ReadAllLines(path));
+                ConfigFileLines.Upsert(lines, "maxRewinds", maxRewinds.ToString(CultureInfo.InvariantCulture));
+                ConfigFileLines.Upsert(lines, "rewindCooldown", cooldownSeconds.ToString(CultureInfo.InvariantCulture));
+                File.WriteAllLines(path, lines);
+                return true;
+            }
+            catch (Exception e)
+            {
+                error = e.Message;
+                return false;
+            }
+        }
+
         private void Validate()
         {
             if (AnchorInterval <= 0) { ModLog.LogWarning("[DeathRewind] anchorInterval 非法，回落 5"); AnchorInterval = 5; }
@@ -134,6 +166,16 @@ namespace DeathRewind.Config
             {
                 ModLog.LogWarning($"[DeathRewind] oneUpSoundVolume 非法（{OneUpSoundVolume}），收窄到 0~1");
                 OneUpSoundVolume = Math.Min(1, Math.Max(0, OneUpSoundVolume));
+            }
+            if (MaxRewinds < 1 || MaxRewinds > 3)
+            {
+                ModLog.LogWarning($"[DeathRewind] maxRewinds 非法（{MaxRewinds}），回落 1");
+                MaxRewinds = 1;
+            }
+            if (RewindCooldownSeconds != 30 && RewindCooldownSeconds != 60 && RewindCooldownSeconds != 90)
+            {
+                ModLog.LogWarning($"[DeathRewind] rewindCooldown 非法（{RewindCooldownSeconds}），回落 60");
+                RewindCooldownSeconds = 60;
             }
             if (!string.Equals(RewindScope, "position", System.StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(RewindScope, "full", System.StringComparison.OrdinalIgnoreCase))

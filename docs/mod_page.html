@@ -517,7 +517,7 @@
     <!-- 首页 Hero -->
     <header id="hero" class="section hero">
         <div class="container">
-            <div class="version-tag">v1.0.11</div>
+            <div class="version-tag">v1.0.12</div>
             <h1 class="text-center" style="margin-top: 20px;">死亡回溯 <span class="text-accent">DeathRewind</span></h1>
             <p class="subtitle">
                 逃离鸭科夫的终极救星。<br>
@@ -558,6 +558,14 @@
             <div class="card">
                 <h3>1UP 提示</h3>
                 <p>HUD Buffs 状态栏首位显示硬币形状「1up」图标，提示你还有一次机会；用掉后隐藏，关卡重置后恢复。进关拿到机会的那一刻还会响一次「1UP」提示音（每关一次，可关闭或调音量）。</p>
+            </div>
+            <div class="card">
+                <h3>设置面板（Ctrl+I）</h3>
+                <p>游戏内按 <code>Ctrl+I</code> 打开：显示当前得分、1UP 存量（用掉的画删除线）与冷却倒计时；可调「每关 1UP 上限（1~3）」与「复活冷却（30/60/90 秒）」，改完立即生效并写回 config.txt。</p>
+            </div>
+            <div class="card">
+                <h3>击杀积分换 1UP</h3>
+                <p>击杀 BOSS 得 50 分、普通生物得 5 分，累计 100 分额外获得一次复活机会（带音效），分数清零重新累计；分数每关重算。</p>
             </div>
             <div class="card">
                 <h3>世界默认不回滚</h3>
@@ -818,11 +826,16 @@
                     <td>「1UP」提示音音量（0~1）</td>
                 </tr>
                 <tr>
-                    <td><span class="config-key">MaxRewinds</span></td>
+                    <td><span class="config-key">maxRewinds</span></td>
                     <td><span class="config-val">1</span></td>
-                    <td>每关只能复活回溯一次（不可配置）</td>
+                    <td>每关 1UP 上限（1~3）：保底 1 次复活，额外次数靠击杀积分赚</td>
                 </tr>
-            </table>
+                <tr>
+                    <td><span class="config-key">rewindCooldown</span></td>
+                    <td><span class="config-val">60</span></td>
+                    <td>复活冷却间隔（秒）：30 / 60 / 90</td>
+                </tr>
+                </table>
         </div>
     </section>
 
@@ -878,6 +891,16 @@
         </div>
         <div class="container">
             <div class="changelog-item">
+                <div class="changelog-date">v1.0.12</div>
+                <div class="changelog-title">设置面板 · 积分 · 多次复活</div>
+                <ul style="padding-left: 20px; font-size: 0.9rem; color: var(--text-muted);">
+                    <li>游戏内按 <code>Ctrl+I</code> 打开设置面板：显示得分、1UP 存量（用掉的画删除线）、冷却倒计时。</li>
+                    <li>可调「每关 1UP 上限（1~3）」与「复活冷却（30/60/90 秒）」，改完立即生效并写回 config.txt。</li>
+                    <li>击杀积分：BOSS 50 分、普通生物 5 分，累计 100 分额外 +1UP（带音效），分数每关重算。</li>
+                    <li>多次复活：用掉一次复活后进入冷却，冷却结束可再次回溯。</li>
+                </ul>
+            </div>
+            <div class="changelog-item">
                 <div class="changelog-date">v1.0.11</div>
                 <div class="changelog-title">「1UP」提示音</div>
                 <ul style="padding-left: 20px; font-size: 0.9rem; color: var(--text-muted);">
@@ -915,7 +938,7 @@
                 </p>
             </div>
             <p style="margin-top: 20px; font-size: 0.7rem; opacity: 0.5;">
-                DeathRewind v1.0.11 · Unity Mono + Harmony 2.x · net472
+                DeathRewind v1.0.12 · Unity Mono + Harmony 2.x · net472
             </p>
         </div>
     </footer>

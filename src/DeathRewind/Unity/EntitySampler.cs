@@ -27,6 +27,12 @@ namespace DeathRewind.Unity
         private readonly Dictionary<string, double> _registeredAt = new Dictionary<string, double>();
         private readonly HashSet<string> _anchorCovered = new HashSet<string>();
         private readonly HashSet<string> _deferredDestroy = new HashSet<string>();
+        /// <summary>敌人稳定 ID → 上次采样时是否存活（检测"存活 → 死亡"跳变 = 一次击杀）。</summary>
+        private readonly Dictionary<string, bool> _enemyAlive = new Dictionary<string, bool>();
+        /// <summary>敌人稳定 ID → 是否 BOSS（登记时判定：角色被销毁后再问就问不到了）。</summary>
+        private readonly Dictionary<string, bool> _enemyBoss = new Dictionary<string, bool>();
+        /// <summary>已计入击杀的敌人 ID（同一个敌人只计一次）。</summary>
+        private readonly HashSet<string> _countedKills = new HashSet<string>();
         private int _enemySeq;
         private int _doorSeq;
         private double _now;
@@ -37,6 +43,9 @@ namespace DeathRewind.Unity
             _anchorCount = anchorCount;
             _anchorInterval = anchorInterval;
         }
+
+        /// <summary>敌人被击杀时触发（参数：稳定 ID、是否 BOSS）。用于积分 → 1UP。</summary>
+        public event System.Action<string, bool> EnemyKilled;
 
         /// <summary>敌人判定（与 EnemyPersistencePatch 共用）。</summary>
         public static bool IsEnemyCharacter(Health health)
@@ -93,15 +102,22 @@ namespace DeathRewind.Unity
                 var health = kv.Key;
                 if (health == null) { RemoveEntry(kv.Value, kv.Key); continue; }
                 var ai = _enemyControllers.TryGetValue(health, out var ctrl) ? ctrl : FindAiController(health);
+                bool alive = !health.IsDead;
                 _store.SetEnemy(kv.Value, new EnemyState
                 {
                     Position = ToArray3(health.transform.position),
                     Rotation = ToArray4(health.transform.rotation),
                     Health = health.CurrentHealth,
-                    Alive = !health.IsDead,
+                    Alive = alive,
                     AiTargetId = ResolveTargetId(ai),
                     Noticed = ai != null && ai.noticed,
                 });
+                // 击杀判定：观察到"存活 → 死亡"的跳变才算一次击杀（同一敌人只计一次）
+                if (_enemyAlive.TryGetValue(kv.Value, out var wasAlive))
+                {
+                    if (wasAlive && !alive) ReportKill(kv.Value);
+                    _enemyAlive[kv.Value] = alive;
+                }
             }
         }
 
@@ -121,6 +137,8 @@ namespace DeathRewind.Unity
             _idToHealth[id] = health;
             _idToObjects[id] = health.gameObject;
             _registeredAt[id] = _now;
+            _enemyAlive[id] = true;                    // 登记时视为存活，之后由采样维护
+            _enemyBoss[id] = IsBossEnemy(id);          // BOSS 身份在登记时定下来（角色销毁后问不到）
             if (ai != null) _enemyControllers[health] = ai;
             var receiver = FindDamageReceiver(health);
             if (receiver != null) _receiverIds[receiver] = id;
@@ -218,6 +236,7 @@ namespace DeathRewind.Unity
                 // 死亡持久化补丁已停用角色根物体 → 该尸体由 Mod 接管
                 _modDeactivated.Add(existing);
                 _store.SetEnemy(existing, new EnemyState { Alive = false, Health = 0f });
+                ReportKill(existing);
                 return;
             }
             string id = "enemy:" + (++_enemySeq);
@@ -237,6 +256,22 @@ namespace DeathRewind.Unity
                 Position = ToArray3(health.transform.position),
                 Rotation = ToArray4(health.transform.rotation),
             });
+            ReportKill(id);   // 该敌人确实是死的（此前没见过它活着 → 不会计入）
+        }
+
+        /// <summary>
+        /// 判定一次击杀并通知订阅者（积分 → 1UP）。
+        /// 只有"我们亲眼见过它活着、现在死了"才算一次击杀；同一个敌人只计一次。
+        /// </summary>
+        private void ReportKill(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return;
+            if (_countedKills.Contains(id)) return;
+            if (!_enemyAlive.TryGetValue(id, out var wasAlive) || !wasAlive) return;
+            _countedKills.Add(id);
+            _enemyAlive[id] = false;
+            bool boss = _enemyBoss.TryGetValue(id, out var isBoss) && isBoss;
+            EnemyKilled?.Invoke(id, boss);
         }
 
         /// <summary>回退中"移除"的敌人：只停用，销毁推迟到提交成功后。</summary>
@@ -453,6 +488,9 @@ namespace DeathRewind.Unity
                     _enemyObjects.Remove(go);
                 _idToObjects.Remove(id);
                 _modDeactivated.Remove(id);
+                _enemyAlive.Remove(id);
+                _enemyBoss.Remove(id);
+                _countedKills.Remove(id);
             }
         }
 
@@ -468,6 +506,9 @@ namespace DeathRewind.Unity
             _deferredDestroy.Clear();
             _idToHealth.Clear();
             _idToObjects.Clear();
+            _enemyAlive.Clear();
+            _enemyBoss.Clear();
+            _countedKills.Clear();
         }
 
         /// <summary>子场景加载：剔除已销毁对象的引用，保留其余稳定 ID。</summary>
@@ -498,6 +539,9 @@ namespace DeathRewind.Unity
                 _enemyObjects.Remove(go);
             _idToHealth.Remove(id);
             _idToObjects.Remove(id);
+            _enemyAlive.Remove(id);
+            _enemyBoss.Remove(id);
+            _countedKills.Remove(id);
             _store?.RemoveEnemy(id);
         }
 

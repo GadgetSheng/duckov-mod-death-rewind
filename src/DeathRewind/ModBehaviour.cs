@@ -20,6 +20,10 @@ namespace DeathRewind
         private LiveStateStore _store = new LiveStateStore();
         /// <summary>「1UP」提示音的触发判定（纯逻辑，见 Core/OneUpCue）。</summary>
         private readonly OneUpCue _oneUpCue = new OneUpCue();
+        /// <summary>积分与 1UP 记账（纯逻辑，每关重算）。</summary>
+        private readonly ScoreState _score = new ScoreState();
+        /// <summary>复活冷却（纯逻辑，用掉一次复活后开始计时）。</summary>
+        private readonly RewindCooldown _cooldown = new RewindCooldown();
         private LevelHooks _hooks;
         private EntitySampler _sampler;
         private AnchorBuilder _builder;
@@ -54,6 +58,12 @@ namespace DeathRewind
         // 对外暴露（DeathInterceptor 需要）
         public AnchorRing Ring => _ring;
         public double CurrentTick => _clock?.CurrentTick ?? 0;
+        /// <summary>积分与 1UP 记账（面板与死亡拦截共用）。</summary>
+        public ScoreState ScoreState => _score;
+        /// <summary>复活冷却（面板与死亡拦截共用）。</summary>
+        public RewindCooldown RewindCooldown => _cooldown;
+        /// <summary>当前配置（面板读取与写回用）。</summary>
+        public ModConfig Config => _config;
 
         /// <summary>死亡裁决期间置 true：禁止 OnLevelEnded 清空锚点环（楼层切换时 RaidEnd/场景 unload 可能误触发）。</summary>
         public bool SuppressLevelEnd
@@ -79,6 +89,9 @@ namespace DeathRewind
             // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
+            _sampler.EnemyKilled += OnEnemyKilled;   // 击杀 → 积分 → 1UP
+            _score.SetCap(_config.MaxRewinds);
+            _cooldown.SetDuration(_config.RewindCooldownSeconds);
             _builder = new AnchorBuilder(_config, _store, _ring, _sampler, CaptureAnchorThumbnail);   // 锚点采集需要按 ID 找回敌人物品
             _restorer = new WorldRestorer(_config, _ring, _store);
             _restorer.SetSampler(_sampler);   // 恢复差量表需要按稳定 ID 找回敌人/门对象
@@ -299,11 +312,14 @@ namespace DeathRewind
                 }
             }
 
-            // HUD "1up" 硬币指示：与死亡拦截同一判定（RewindCount < MaxRewinds），
-            // 还有回溯机会时显示、用掉后自动隐藏；HUD 未就绪时内部带 1s 重试节流
+            // HUD "1up" 硬币指示：还有可用的复活机会时显示（保底 1 次 + 积分赚到的），
+            // 用掉后/冷却期内自动隐藏；HUD 未就绪时内部带 1s 重试节流
             // 基地（Base）是安全屋没有回溯场景，不显示 1UP
+            bool hasRevive = _score.Held > 0;
+            bool cooldownReady = _cooldown.IsReady(_clock.CurrentTick);
             bool shouldShow = _ring != null
-                && _ring.RewindCount < _config.MaxRewinds
+                && hasRevive
+                && cooldownReady
                 && !LevelAccess.InBaseLevel;
             RewindIndicator.SetAvailable(shouldShow);
 
@@ -317,6 +333,53 @@ namespace DeathRewind
             }
 
             HandleDebugHotkeys();
+
+            // Ctrl+I（或 macOS 的 Cmd+I）开关游戏内设置面板
+            bool modifier = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)
+                            || Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
+            if (modifier && Input.GetKeyDown(KeyCode.I)) RewindSettingsPanel.Toggle();
+        }
+
+        /// <summary>击杀回调：加分；凑满 100 分发放一次额外 1UP 并播提示音。</summary>
+        private void OnEnemyKilled(string id, bool isBoss)
+        {
+            bool granted = _score.AddKill(isBoss);
+            // 击杀日志走普通通道（每次击杀都打会刷屏）；发放 1UP 是决策级事件，始终输出
+            ModLog.Log($"[DeathRewind] 击杀 {(isBoss ? "BOSS" : "生物")} → 得分 {_score.Score}/{ScoreState.PointsPerUp}");
+            if (granted)
+            {
+                ModLog.LogImportant($"[DeathRewind] 积分满 {ScoreState.PointsPerUp} → +1UP！剩余 {_score.Held} 次");
+                if (_config != null) OneUpSound.Play((float)_config.OneUpSoundVolume);
+            }
+        }
+
+        /// <summary>回退成功：扣掉一次 1UP 并开始复活冷却（回退失败不扣）。</summary>
+        public void ConsumeRewind()
+        {
+            _score.TryConsume();
+            _cooldown.Start(_clock.CurrentTick);
+            ModLog.LogImportant($"[DeathRewind] 复活机会已用：剩余 {_score.Held} 次，冷却 {_cooldown.Duration:0} 秒");
+        }
+
+        /// <summary>设置面板改动：立即生效并写回 config.txt（供下次启动读取）。</summary>
+        public void ApplyPanelSettings(int maxRewinds, int cooldownSeconds)
+        {
+            if (_config == null) return;
+            _config.MaxRewinds = Mathf.Clamp(maxRewinds, 1, 3);
+            _config.RewindCooldownSeconds = (cooldownSeconds == 30 || cooldownSeconds == 60 || cooldownSeconds == 90)
+                ? cooldownSeconds
+                : 60;
+            _score.SetCap(_config.MaxRewinds);
+            _cooldown.SetDuration(_config.RewindCooldownSeconds);
+            _ring?.Reconfigure(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            if (ModConfig.SavePanelSettings(_config.MaxRewinds, _config.RewindCooldownSeconds, out var error))
+            {
+                ModLog.LogImportant($"[DeathRewind] 设置已保存：每关 1UP 上限 {_config.MaxRewinds}，复活冷却 {_config.RewindCooldownSeconds} 秒");
+            }
+            else
+            {
+                ModLog.LogWarning($"[DeathRewind] 设置写回 config.txt 失败（{error}），仅本局生效");
+            }
         }
 
         private void HandleLevelStarted()
@@ -340,6 +403,8 @@ namespace DeathRewind
             _levelStartAnchors.Clear();
             _scenesWithStartAnchor.Clear();
             _oneUpCue.OnLevelStarted();   // 武装本关的「1UP」提示音
+            _score.ResetLevel(_config.MaxRewinds);   // 积分与 1UP 每关重算
+            _cooldown.Reset();
             // 换关卡：玩家会被送到新地图的出生点 → 坐标稳定性重新计时
             _hasLastPlayerPos = false;
             _playerStable = false;
@@ -370,6 +435,8 @@ namespace DeathRewind
             _sampler.ResetRegistry();
             AnchorBuilder.DeleteAllAnchorFiles();
             _oneUpCue.OnLevelEnded();     // 解除武装，等下一关开始
+            _score.ResetLevel(_config.MaxRewinds);
+            _cooldown.Reset();
             ModLog.Log("[DeathRewind] level ended: state cleared");
         }
 
@@ -430,6 +497,8 @@ namespace DeathRewind
         {
             // 死亡裁决面板（IMGUI 不受 timeScale=0 影响）
             DeathInterceptor.DrawPrompt();
+            // 游戏内设置面板（Ctrl+I）
+            RewindSettingsPanel.Draw(this);
         }
 
         // timeScale 收口：任何退出拦截面板的路径都必须经过这里

@@ -114,6 +114,17 @@ namespace DeathRewind.Harmony
         }
 
         /// <summary>
+        /// 有效回溯窗口（秒）：随**已用回溯次数**扩展（maxRewindAge → 2× → 3×）。
+        /// 第一次回溯会把更年轻的锚点丢弃，若窗口不扩展，第二次回溯就没有可选目标了。
+        /// 实际能回溯多深仍受锚点环保留量限制（每空间 anchorCount × 间隔）。
+        /// </summary>
+        private static double EffectiveWindowAge(AnchorRing ring)
+        {
+            int used = ring != null ? ring.RewindCount : 0;
+            return _config.MaxRewindAge * (used + 1);
+        }
+
+        /// <summary>
         /// 结算界面的回溯候选节点（最多 <see cref="MaxTimelineNodes"/> 个，旧→新）：
         /// 从最老（maxRewindAge，默认 60s）向内按 timelineStep（默认 10s）取点，
         /// 即约 60 / 50 / 40 / 30 四个选项。
@@ -127,10 +138,12 @@ namespace DeathRewind.Harmony
             if (owner == null) return list;
             string sceneKey = LevelAccess.CurrentSceneKey;
 
-            // 跨空间候选：当前空间的锚点优先，当前空间不够时用本关卡其它空间的锚点补位。
+            // 跨空间候选：当前空间的锚点优先，当前空间不够时用**本关卡其它空间**的锚点补位。
             // 环内锚点必然属于当前关卡（换关卡时 HandleLevelStarted 会清空锚点环）。
+            // 有效窗口随已用回溯次数扩展（60 → 120 → 180 秒）：第二次之后的回溯要能选到更早的锚点。
+            double windowAge = EffectiveWindowAge(ring);
             var targets = ring.SelectByAgeAcrossSpaces(LevelAccess.CurrentLevelSpaceKeys,
-                                                        _config.MaxRewindAge, _config.TimelineStep,
+                                                        windowAge, _config.TimelineStep,
                                                         MaxTimelineNodes, sceneKey);
             if (targets.Count > 0)
             {
@@ -151,10 +164,10 @@ namespace DeathRewind.Harmony
             // 年龄超出 maxRewindAge 的不能当兜底目标（否则会回溯到几分钟前的位置）。
             var start = owner.GetLevelStartAnchor(sceneKey);
             double startAge = start != null ? owner.CurrentTick - start.AbsTimestamp : -1;
-            if (start == null || startAge < 2 || startAge > _config.MaxRewindAge)
+            if (start == null || startAge < 2 || startAge > windowAge)
             {
                 start = null;
-                foreach (var a in ring.SelectWindow(sceneKey, _config.MaxRewindAge))
+                foreach (var a in ring.SelectWindow(sceneKey, windowAge))
                 {
                     if (owner.CurrentTick - a.AbsTimestamp < 2) continue;
                     start = a;
@@ -210,9 +223,18 @@ namespace DeathRewind.Harmony
 
             var ring = _owner != null ? _owner.Ring : null;
             if (ring == null) return true;
-            if (ring.RewindCount >= _config.MaxRewinds)
+            // 复活机会由经济系统决定：保底 1 次 + 击杀积分赚到的（受 maxRewinds 上限约束）
+            var score = _owner.ScoreState;
+            if (score != null && score.Held <= 0)
             {
-                ModLog.LogImportant("[DeathRewind] 回溯机会已用尽（每关一次），本次不提供回溯");
+                ModLog.LogImportant("[DeathRewind] 回溯机会已用尽，本次不提供回溯");
+                return true;
+            }
+            // 冷却：用过一次复活后要等 CD 到点才能再复活
+            var cooldown = _owner.RewindCooldown;
+            if (cooldown != null && !cooldown.IsReady(_owner.CurrentTick))
+            {
+                ModLog.LogImportant($"[DeathRewind] 复活冷却中（剩余 {cooldown.Remaining(_owner.CurrentTick):0} 秒），本次不提供回溯");
                 return true;
             }
 
@@ -365,7 +387,7 @@ namespace DeathRewind.Harmony
             bool rewind = false;
             RewindPrompt.Open(
                 "你倒下了",
-                $"回退到约 {ageSeconds:0} 秒前的世界状态？剩余回退次数 {_config.MaxRewinds - _owner.Ring.RewindCount}",
+                $"回退到约 {ageSeconds:0} 秒前的世界状态？剩余复活次数 {_owner.ScoreState?.Held ?? 0}",
                 "回退",
                 "接受死亡",
                 ParseKey(_config.RewindHotkey),
@@ -424,6 +446,7 @@ namespace DeathRewind.Harmony
                 var removed = new List<Anchor>();
                 _owner.Ring.CommitRewind(anchor, removed);
                 _owner.Ring.ResetGridTo(anchor.GridTimestamp, _owner.CurrentTick);
+                _owner.ConsumeRewind();   // 扣 1UP + 开始复活冷却（回退失败不扣）
                 foreach (var old in removed) _owner.ReleaseAnchor(old);
                 _owner.ReleaseCommittedDestroy();
                 ModLog.LogImportant($"[DeathRewind] rewind result=ok rewindCount={_owner.Ring.RewindCount} consumedAnchor={anchor.Id}");
