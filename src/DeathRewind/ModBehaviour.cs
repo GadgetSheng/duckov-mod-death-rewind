@@ -184,6 +184,7 @@ namespace DeathRewind
             OneUpSound.Dispose();
             RewindSettingsPanel.Dispose();
             _sampler?.UnsubscribeDeathEvents();   // 退订全局死亡事件（静态事件，必须断开）
+            ThumbnailCapture.Dispose();       // 释放抓图相机
             _hooks?.Uninstall();
             ModLog.Log("[DeathRewind] deactivated");
         }

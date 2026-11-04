@@ -84,7 +84,7 @@ src/DeathRewind/
 | `WorldRestorer` | 执行差量恢复阶段 A–F，失败时反向补偿 | `RestoreAsync`、`SetDeathContext`、`PhaseA/B/C/D/E/E2/E3/E4/E6/F` |
 | `MetaRestore` | 主存档原子覆盖 + `SavesSystem.SetFile` 触发元系统重载；回退前备份 | `OverwriteFrom`、`BackupCurrent` |
 | `InventoryPayload` | 背包与装备槽载荷的采集/解析/原地还原 | `Capture`、`Parse`、`ApplyAsync`、`CaptureItem`、`InstantiateItemAsync`、`CaptureSlots`、`ApplySlotsAsync`、`VerifyRoundTrip` |
-| `ThumbnailCapture` | 锚点构建同帧抓屏 → 缩放 → PNG | `Capture` |
+| `ThumbnailCapture` | 锚点构建同帧抓屏 → **专用抓图相机**渲到 192×108 RT → ReadPixels → 后台线程 PNG 编码 | `Capture`、`CaptureAsync`、`Dispose` |
 | `OneUpSound` | 「1UP」提示音播放：内嵌 WAV → `AudioClip` → `AudioSource.PlayOneShot`（2D） | `Play`、`Dispose` |
 | `DeathInterceptor` | 死亡入口前缀拦截、裁决流程、恢复编排与复活后守卫 | `Install`、`OnDeathPrefix`、`DeathChoiceRoutine`、`RestoreRoutine`、`PostReviveFixup`、`PostReviveGuard`、`AcceptDeath`、`ScheduleReplay` |
 | `EnemyPersistencePatch` | 阻止死亡敌人 `Health.DestroyOnDelay` 销毁 | `Health.DestroyOnDelay` 前缀 |
@@ -438,3 +438,4 @@ bash tools/build.sh
 26. **「1UP」提示音的音频必须内嵌 + 自行解码**：mp3 只有 Unity 的导入管线或 `UnityWebRequest` 能解，Mod 目录既不是 Unity 工程也不保证可读 → 构建期转成 16bit PCM WAV 内嵌进程序集，运行时用 `WavPcm` 逐 chunk 解析（转换产物在 `fmt` 与 `data` 之间会夹 `FLER` 等附属 chunk，固定偏移解析会读错）。触发判定放在纯逻辑 `OneUpCue` 里（关卡生命周期武装），**不要**直接跟着 HUD 指示器可见性走——主菜单里 `RewindCount < MaxRewinds` 恒成立，会在进游戏前就响。
 27. **击杀积分只算玩家击杀，判定方式与任务系统一致**：`EntitySampler` 订阅**静态事件** `Health.OnDead`（签名 `Action<Health, DamageInfo>`），用 `DamageInfo.fromCharacter` 判断击杀者——`killer.Health.IsMainCharacterHealth` 为真才算玩家击杀（游戏任务计数 `QuestTask_KillCount.Health_OnDead` 用的是同一条判据 `CharacterMainControlExtensions.IsMainCharacter`）。**不要**改回"采样时观察存活→死亡跳变"那种判定：它拿不到 `DamageInfo`，分不清玩家击杀与环境/队友击杀。`Health.OnDead` 是静态事件，**Mod 停用时必须 `UnsubscribeDeathEvents()` 退订**。
 28. **多次复活必须让回溯窗口随使用次数扩展**：第一次回溯会丢弃更年轻的锚点，若窗口固定 60s，第二次回溯就没有可选目标 → 有效窗口 `maxRewindAge × (已用次数 + 1)`。实际能回溯多深仍受锚点环保留量限制（每空间 `anchorCount` × 间隔）。
+29. **抓缩略图不许碰游戏主相机**：在主相机上 `targetTexture = rt` + `cam.Render()` 会让主相机在帧中途多渲一次，Metal/macOS 上表现为**每 5 秒闪一帧**（锚点网格间隔 = 闪屏频率）。必须用专用抓图相机（`CopyFrom` 主相机设置 + 自己的 transform，`enabled = false`，只手动 `Render()` 到 RT）。同理，**不要**在帧中途用 `ScreenCapture.CaptureScreenshotAsTexture` 全屏回读（分配整屏纹理 + 卡顿）。
