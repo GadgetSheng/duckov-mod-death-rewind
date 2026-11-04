@@ -127,8 +127,8 @@ namespace DeathRewind.Config
         }
 
         /// <summary>
-        /// 把 Ctrl+I 面板改动的两项设置写回 config.txt（只改这两行，其余内容原样保留）。
-        /// 这两项**不进 ModConfig 框架**（游戏内设置面板），否则框架的 ES3 值会盖掉面板写入的结果。
+        /// 把 Ctrl+N 面板改动的设置写回 config.txt（只改这三行，其余内容原样保留）。
+        /// 这几项**不进 ModConfig 框架**（游戏内设置面板），否则框架的 ES3 值会盖掉面板写入的结果。
         /// </summary>
         public static bool SavePanelSettings(bool enhancedMode, int maxRewinds, int cooldownSeconds, out string error)
         {

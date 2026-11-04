@@ -51,7 +51,7 @@ src/DeathRewind/
 │   ├── ClosurePanel.cs       原生 YOU DIED 界面注入
 │   ├── RewindIndicator.cs    HUD「1up」机会指示
 │   ├── RewindPrompt.cs       IMGUI 降级裁决面板
-│   └── RewindSettingsPanel.cs 游戏内设置面板（Ctrl+I）
+│   └── RewindSettingsPanel.cs 游戏内设置面板（Ctrl+N）
 ├── Audio/                    「1UP」提示音素材
 │   ├── 1_Up_sound.mp3        音源原始文件（不参与运行时）
 │   └── oneup.wav             16bit PCM WAV，内嵌进程序集（运行时用）
@@ -94,7 +94,7 @@ src/DeathRewind/
 | `ClosurePanel` | 在原生 YOU DIED 界面注入回溯按钮、提示文字、箭头、预览图与可拖拽时间轴 | `Create`、`SetRewindLabel`、`SelectedIndex`、`CandidateCount`、`NodeSelected`、`Layout`、`Dispose` |
 | `RewindIndicator` | HUD Buffs 状态栏首位的「1up」硬币指示 | `SetAvailable`、`Dispose` |
 | `RewindPrompt` | 原生结算界面不可用时的 IMGUI 降级面板 | `Open`、`Close`、`Draw` |
-| `RewindSettingsPanel` | 游戏内设置面板（Ctrl+I）：得分 / 1UP（删除线）/ 冷却倒计时 + 两项设置 | `Toggle`、`Close`、`Draw` |
+| `RewindSettingsPanel` | 游戏内设置面板（Ctrl+N）：得分 / 1UP（删除线）/ 冷却倒计时 + 增强模式与两项设置 | `Toggle`、`Close`、`Draw` |
 | `ModConfig` | config.txt 解析/校验 + 游戏内设置覆盖 + 调试开关 | `Load`、`Validate`、`FilePath` |
 | `PrivateStateAccessor` | 集中反射读写游戏私有字段，失败时降级 | `GetBool`、`SetBool`、`GetFloat`、`SetFloat`、`GetObject` |
 
@@ -312,7 +312,7 @@ sequenceDiagram
 | `rewindCooldown` | `60` | 复活冷却间隔（秒）：30 / 60 / 90，非法回落 60。**仅增强模式生效** |
 | `enhancedMode` | `false` | 增强模式总开关：开启后积分换 1UP、每关上限与冷却才生效；关闭时保持旧行为（每关一次复活） |
 
-固定约束：`maxRewinds` 与 `rewindCooldown` **只走 config.txt + Ctrl+I 设置面板**，不进 ModConfig 框架（框架的 ES3 值会盖掉面板写入的结果）。
+固定约束：`enhancedMode` / `maxRewinds` / `rewindCooldown` **只走 config.txt + Ctrl+N 设置面板**，不进 ModConfig 框架（框架的 ES3 值会盖掉面板写入的结果）。
 
 ---
 
@@ -345,7 +345,9 @@ sequenceDiagram
 
 `RewindPrompt`：原生 `ClosureView` 不可用时显示标题/详情/回溯/继续，支持鼠标与热键。
 
-### 9.4 游戏内设置面板（Ctrl+I）
+### 9.4 游戏内设置面板（Ctrl+N）
+
+> 热键用 `Ctrl+N`——**避开游戏原有的任务键 `Ctrl+I`**（会互相抢键）。
 
 `RewindSettingsPanel`（屏幕右上角 IMGUI 区域，不暂停游戏）：
 

@@ -4,7 +4,7 @@ using UnityEngine;
 namespace DeathRewind.UI
 {
     /// <summary>
-    /// 游戏内设置面板（<c>Ctrl+I</c> 开关）。
+    /// 游戏内设置面板（<c>Ctrl+N</c> 开关；避开游戏原有的任务键 Ctrl+I）。
     ///
     /// 展示：当前得分、1UP 存量（**已用掉的画删除线**）、复活冷却倒计时。
     /// 设置：每关 1UP 上限（1~3）、复活冷却间隔（30/60/90 秒）——改动立即生效并写回 config.txt。
@@ -26,7 +26,7 @@ namespace DeathRewind.UI
         /// <summary>面板是否打开。</summary>
         public static bool IsOpen => _open;
 
-        /// <summary>切换面板开关（Ctrl+I）。</summary>
+        /// <summary>切换面板开关（Ctrl+N）。</summary>
         public static void Toggle() => _open = !_open;
 
         /// <summary>关闭面板。</summary>
@@ -127,7 +127,7 @@ namespace DeathRewind.UI
             GUI.enabled = previousEnabled;
 
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("关闭 (Ctrl+I)")) Close();
+            if (GUILayout.Button("关闭 (Ctrl+N)")) Close();
             GUILayout.EndArea();
         }
 

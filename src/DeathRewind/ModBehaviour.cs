@@ -336,10 +336,9 @@ namespace DeathRewind
 
             HandleDebugHotkeys();
 
-            // Ctrl+I（或 macOS 的 Cmd+I）开关游戏内设置面板
-            bool modifier = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)
-                            || Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
-            if (modifier && Input.GetKeyDown(KeyCode.I)) RewindSettingsPanel.Toggle();
+            // Ctrl+N 开关游戏内设置面板（避开游戏原有的任务键 Ctrl+I）
+            bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+            if (ctrl && Input.GetKeyDown(KeyCode.N)) RewindSettingsPanel.Toggle();
         }
 
         /// <summary>击杀回调：加分；凑满 100 分发放一次额外 1UP 并播提示音。</summary>
@@ -504,7 +503,7 @@ namespace DeathRewind
         {
             // 死亡裁决面板（IMGUI 不受 timeScale=0 影响）
             DeathInterceptor.DrawPrompt();
-            // 游戏内设置面板（Ctrl+I）
+            // 游戏内设置面板（Ctrl+N）
             RewindSettingsPanel.Draw(this);
         }
 

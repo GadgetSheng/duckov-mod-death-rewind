@@ -9,7 +9,7 @@
 
 给 DeathRewind 增加「多次复活」经济系统（**整套能力默认关闭**，需在设置面板开启「增强模式」）：
 
-1. **设置面板**：游戏内按 `Ctrl+I` 打开，可开启「增强模式」、配置「每关 1UP 上限（1~3）」与「复活冷却间隔（30/60/90 秒）」，并展示当前得分、1UP 存量（含删除线）与冷却倒计时。
+1. **设置面板**：游戏内按 `Ctrl+N` 打开（避开游戏原有的任务键 `Ctrl+I`），可开启「增强模式」、配置「每关 1UP 上限（1~3）」与「复活冷却间隔（30/60/90 秒）」，并展示当前得分、1UP 存量（含删除线）与冷却倒计时。
 2. **积分**：击杀 BOSS（50 分）与普通生物（5 分）累计积分；每满 100 分额外发 1 次复活机会并清零积分；积分每关重算。
 3. **多次复活**：每关可持有的 1UP 上限可调（默认 1，兼容现状）；用掉一次复活后进入冷却，冷却期内不能再复活；HUD 与面板展示删除线的「×N UP」与冷却倒计时。
 
@@ -67,7 +67,7 @@
 | `Core/ScoreState.cs` | 纯逻辑 | 得分与 1UP 记账（可单测） |
 | `Core/RewindCooldown.cs` | 纯逻辑 | 冷却计时（可单测） |
 | `Unity/EntitySampler.cs` | Unity | 击杀检测 → `EnemyKilled(id, isBoss)` 事件 |
-| `UI/RewindSettingsPanel.cs` | UI | `Ctrl+I` 设置面板（IMGUI），得分/1UP/冷却展示 + 两项设置 |
+| `UI/RewindSettingsPanel.cs` | UI | `Ctrl+N` 设置面板（IMGUI），得分/1UP/冷却展示 + 增强模式与两项设置 |
 | `Harmony/DeathInterceptor.cs` | Harmony | 死亡入口按「有 1UP 且冷却结束」放行；回退成功后扣 1UP 并开始冷却；有效窗口扩展 |
 | `Config/ModConfig.cs` | Config | `maxRewinds` / `rewindCooldown` 解析、校验、写回 config.txt |
 | `ModBehaviour.cs` | 入口 | 装配 ScoreState / Cooldown / 采样器事件；HUD 指示与冷却联动；OnGUI 转发面板 |
@@ -92,7 +92,7 @@
 
 ## 4. 设置面板
 
-- 触发：`Ctrl+I`（macOS 额外接受 `Cmd+I`）切换；面板关闭时零开销。
+- 触发：`Ctrl+N` 切换（**避开游戏原有的任务键 `Ctrl+I`**）；面板关闭时零开销。
 - 位置：屏幕右上角，`GUILayout.BeginArea` + `GUI.skin.box`，不暂停游戏。
 - 内容：
   - `得分 45 / 100`（达上限时显示「已满」）。
@@ -100,7 +100,7 @@
   - 冷却行：`就绪` 或 `冷却 12 秒`。
   - `每关 1UP 上限`：`1 / 2 / 3` 三个按钮。
   - `复活冷却`：`30 / 60 / 90` 三个按钮。
-  - `关闭 (Ctrl+I)` 按钮。
+  - `关闭 (Ctrl+N)` 按钮。
 - 改设置立即生效，并**写回 config.txt**（只改 `maxRewinds` / `rewindCooldown` 两行，其余原样保留）。
 - 这两项**不进 ModConfig 框架**（游戏内设置面板），避免 ES3 覆盖掉面板写入的值。
 
