@@ -383,6 +383,27 @@ bash tools/build.sh
 
 `tools/check-core-purity.sh` 保证 `Core/` 不引用 UnityEngine / 游戏程序集 / EasySave3。
 
+### 10.1 本地测试的两个坑（改完没生效先查这里）
+
+1. **游戏加载顺序是 workshop 优先 → `Contents/Mods` 其次**。订阅了 Steam 创意工坊的 Mod 时，
+   游戏会**同时加载两份** `DeathRewind`（Player.log 里出现两次 `Loading mod dll at path:`），
+   旧的 workshop 版本会盖在前面。本地调试要让两边一致：
+
+   ```bash
+   WORKSHOP_DEPLOY=1 bash tools/build.sh   # 同步到 workshop 目录（Steam 校验时会被还原）
+   ```
+
+   想彻底只跑本地版：在 Steam 里取消订阅该 Mod，让游戏只加载 `Contents/Mods`。
+2. **改动必须重启游戏**。程序集在进程启动时就加载进内存了，构建产物写盘时间晚于
+   进程启动时间 = 改动没生效。核对方法：
+
+   ```bash
+   ps -o lstart= -p <Duckov pid>          # 进程启动时间
+   ls -l src/DeathRewind/bin/Release/DeathRewind.dll   # 新 DLL 写盘时间
+   grep -n "Loading mod dll at path" ~/Library/Logs/TeamSoda/Duckov/Player.log | tail
+   ```
+
+
 ---
 
 ## 11. 设计红线与已知约束
