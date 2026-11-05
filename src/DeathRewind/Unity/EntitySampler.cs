@@ -29,8 +29,15 @@ namespace DeathRewind.Unity
         private readonly HashSet<string> _deferredDestroy = new HashSet<string>();
         /// <summary>敌人稳定 ID → 是否 BOSS（登记时判定：角色被销毁后再问就问不到了）。</summary>
         private readonly Dictionary<string, bool> _enemyBoss = new Dictionary<string, bool>();
+        /// <summary>敌人稳定 ID → 是否带星精英（头顶五角星，积分额外加成用，登记时定下来）。</summary>
+        private readonly Dictionary<string, bool> _enemyStar = new Dictionary<string, bool>();
+        /// <summary>敌人稳定 ID → 角色预设 nameKey（积分分类用，登记时定下来）。</summary>
+        private readonly Dictionary<string, string> _enemyNameKey = new Dictionary<string, string>();
         /// <summary>已计入击杀的敌人 ID（同一个敌人只计一次）。</summary>
         private readonly HashSet<string> _countedKills = new HashSet<string>();
+        /// <summary>CharacterRandomPreset.characterIconType（私有枚举字段，带星精英判定用）。</summary>
+        private static readonly System.Reflection.FieldInfo IconTypeField =
+            HarmonyLib.AccessTools.Field(typeof(CharacterRandomPreset), "characterIconType");
         private int _enemySeq;
         private int _doorSeq;
         private double _now;
@@ -45,8 +52,8 @@ namespace DeathRewind.Unity
             Health.OnDead += HandleEnemyDead;
         }
 
-        /// <summary>敌人被**玩家**击杀时触发（参数：稳定 ID、是否 BOSS）。用于积分 → 1UP。</summary>
-        public event System.Action<string, bool> EnemyKilled;
+        /// <summary>敌人被**玩家**击杀时触发（参数：稳定 ID、是否 BOSS、是否带星精英、角色预设 nameKey）。用于积分 → 1UP。</summary>
+        public event System.Action<string, bool, bool, string> EnemyKilled;
 
         /// <summary>敌人判定（与 EnemyPersistencePatch 共用）。</summary>
         public static bool IsEnemyCharacter(Health health)
@@ -131,7 +138,9 @@ namespace DeathRewind.Unity
             _idToHealth[id] = health;
             _idToObjects[id] = health.gameObject;
             _registeredAt[id] = _now;
-            _enemyBoss[id] = IsBossEnemy(id);          // BOSS 身份在登记时定下来（角色销毁后问不到）
+            // BOSS / 带星精英 / nameKey 在登记时定下来（角色销毁后问不到）。
+            // nameKey 是游戏自身的敌人类型判据（SavesCounter.AddKillCount 同款），积分分类见 Core/KillScore。
+            CaptureScoreTraits(id, character);
             if (ai != null) _enemyControllers[health] = ai;
             var receiver = FindDamageReceiver(health);
             if (receiver != null) _receiverIds[receiver] = id;
@@ -237,6 +246,8 @@ namespace DeathRewind.Unity
             _idToHealth[id] = health;
             _idToObjects[id] = health.gameObject;
             _registeredAt[id] = _now;
+            // 死亡登记的敌人（尸体）回溯复活后再次被击杀也要正确计分 → 同样定格 BOSS/精英/nameKey
+            CaptureScoreTraits(id, health != null ? health.TryGetCharacter() : null);
             // 死亡持久化补丁会停用角色根物体 → 该尸体由 Mod 接管，可由 Mod 销毁
             _modDeactivated.Add(id);
             var root = RootOf(health);
@@ -292,7 +303,34 @@ namespace DeathRewind.Unity
             if (_countedKills.Contains(id)) return;
             _countedKills.Add(id);
             bool boss = _enemyBoss.TryGetValue(id, out var isBoss) && isBoss;
-            EnemyKilled?.Invoke(id, boss);
+            bool star = _enemyStar.TryGetValue(id, out var isStar) && isStar;
+            _enemyNameKey.TryGetValue(id, out var nameKey);
+            EnemyKilled?.Invoke(id, boss, star, nameKey);
+        }
+
+        /// <summary>
+        /// 登记时定格积分三要素：是否 BOSS、是否带星精英、nameKey。
+        /// 带星精英 = 角色预设 <c>characterIconType == elete</c>（敌人头顶五角星图标的来源，
+        /// 见 <c>CharacterRandomPreset.GetCharacterIcon</c>）；该字段私有，反射读取，缺失/异常按普通敌人处理。
+        /// </summary>
+        private void CaptureScoreTraits(string id, CharacterMainControl character)
+        {
+            _enemyBoss[id] = character != null && character.isBossCharacter;
+            _enemyStar[id] = character != null && IsStarElite(character);
+            _enemyNameKey[id] = (character != null && character.characterPreset) ? character.characterPreset.nameKey : null;
+        }
+
+        /// <summary>带星精英判定：<c>CharacterRandomPreset.characterIconType</c>（私有枚举字段）== elete。</summary>
+        private static bool IsStarElite(CharacterMainControl character)
+        {
+            try
+            {
+                var preset = character.characterPreset;
+                if (preset == null) return false;
+                var value = IconTypeField?.GetValue(preset);
+                return value is CharacterIconTypes type && type == CharacterIconTypes.elete;
+            }
+            catch { return false; }
         }
 
         /// <summary>回退中"移除"的敌人：只停用，销毁推迟到提交成功后。</summary>
@@ -510,6 +548,8 @@ namespace DeathRewind.Unity
                 _idToObjects.Remove(id);
                 _modDeactivated.Remove(id);
                 _enemyBoss.Remove(id);
+                _enemyStar.Remove(id);
+                _enemyNameKey.Remove(id);
                 _countedKills.Remove(id);
             }
         }
@@ -527,6 +567,8 @@ namespace DeathRewind.Unity
             _idToHealth.Clear();
             _idToObjects.Clear();
             _enemyBoss.Clear();
+            _enemyStar.Clear();
+            _enemyNameKey.Clear();
             _countedKills.Clear();
         }
 
@@ -565,6 +607,8 @@ namespace DeathRewind.Unity
             _idToHealth.Remove(id);
             _idToObjects.Remove(id);
             _enemyBoss.Remove(id);
+            _enemyStar.Remove(id);
+            _enemyNameKey.Remove(id);
             _countedKills.Remove(id);
             _store?.RemoveEnemy(id);
         }

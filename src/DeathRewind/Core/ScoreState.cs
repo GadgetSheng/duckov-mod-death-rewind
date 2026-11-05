@@ -6,68 +6,43 @@ namespace DeathRewind.Core
     /// 积分与 1UP 记账（纯逻辑）。
     ///
     /// **增强模式默认关闭**——关闭时保持旧行为：每关只有保底的 1 次复活，不计分、
-    /// 不发放额外 1UP（上限与冷却也不生效，由调用方按同一开关处理）。
-    /// 开启后规则如下：
-    /// · 每关保底 <see cref="BaseUps"/> 次复活；上限 <see cref="Cap"/>（1~3）；
-    /// · 击杀 BOSS 得 <see cref="BossPoints"/> 分，普通生物得 <see cref="CreaturePoints"/> 分；
-    /// · 累计 <see cref="PointsPerUp"/> 分发放 1 次额外复活，并把分数清零；
-    /// · 已达上限时不再发放，分数封顶为 100（界面显示"已满"）；
+    /// 不发放额外 1UP（冷却也不生效，由调用方按同一开关处理）。
+    /// 开启后规则如下（v1.0.14 起取消每关次数上限）：
+    /// · 每关保底 <see cref="BaseUps"/> 次复活，**不限总次数**；
+    /// · **计分前提是本关已死亡用掉过回溯机会**（UpsUsed > 0）——先丢机会、再靠击杀赚回；
+    /// · 击杀按目标类型得分（<see cref="KillScore"/>：BOSS 55 / 风暴生物 25 / 雇佣兵·游荡者 15 / 其他 5）；
+    /// · 累计 <see cref="PointsPerUp"/> 分发放 1 次额外复活；**溢出分数结转**（95+50=145 → 发放后剩 45）；
+    /// · 用掉 1UP 后可靠积分再次赚回，真正的限制是复活冷却（见 <see cref="RewindCooldown"/>）；
     /// · 分数与 1UP 计数**每关重算**（<see cref="ResetLevel"/>）。
     /// </summary>
     public sealed class ScoreState
     {
         /// <summary>满多少分发放一次额外 1UP。</summary>
         public const int PointsPerUp = 100;
-        /// <summary>击杀 BOSS 的得分。</summary>
-        public const int BossPoints = 50;
-        /// <summary>击杀普通生物的得分。</summary>
-        public const int CreaturePoints = 5;
         /// <summary>每关保底的一次复活（沿用旧行为）。</summary>
         public const int BaseUps = 1;
-        /// <summary>每关 1UP 上限的最小值。</summary>
-        public const int MinCap = 1;
-        /// <summary>每关 1UP 上限的最大值。</summary>
-        public const int MaxCap = 3;
 
-        /// <summary>每关 1UP 上限（1~3）。</summary>
-        public int Cap { get; private set; } = MinCap;
-        /// <summary>当前得分（0~100，达上限时封顶为 100）。</summary>
+        /// <summary>当前得分（0~99；满 100 立即发放 1UP 并结转溢出）。</summary>
         public int Score { get; private set; }
         /// <summary>本关靠积分额外获得的 1UP 数。</summary>
         public int UpsEarned { get; private set; }
         /// <summary>本关已消耗的 1UP 数。</summary>
         public int UpsUsed { get; private set; }
 
-        /// <summary>增强模式：开启后积分才能换 1UP、每关上限与冷却才生效。默认关闭（保持旧行为）。</summary>
+        /// <summary>增强模式：开启后积分才能换 1UP、复活冷却才生效。默认关闭（保持旧行为）。</summary>
         public bool Enhanced { get; private set; }
 
-        /// <summary>实际生效的每关 1UP 上限：增强模式关闭时固定为保底 1 次（保持旧行为）。</summary>
-        public int EffectiveCap => Enhanced ? Cap : BaseUps;
-
-        /// <summary>本关可持有的 1UP 总数（保底 + 积分获得，受生效上限约束）。</summary>
-        public int TotalUps => Math.Min(EffectiveCap, BaseUps + UpsEarned);
+        /// <summary>本关可持有的 1UP 总数（保底 + 积分获得，不设上限）。</summary>
+        public int TotalUps => BaseUps + UpsEarned;
         /// <summary>当前还能复活几次。</summary>
         public int Held => Math.Max(0, TotalUps - UpsUsed);
-        /// <summary>是否已经拿满本关的 1UP（不能再靠积分增加）。</summary>
-        public bool AtCap => TotalUps >= Cap;
-        /// <summary>分数是否已满（未达上限时满 100 会立即发放并清零，因此这里只在达上限时为真）。</summary>
-        public bool ScoreFull => Score >= PointsPerUp;
 
-        /// <summary>换关卡：清空分数与 1UP 计数，并采用新的上限。</summary>
-        public void ResetLevel(int cap)
+        /// <summary>换关卡：清空分数与 1UP 计数。</summary>
+        public void ResetLevel()
         {
             Score = 0;
             UpsEarned = 0;
             UpsUsed = 0;
-            SetCap(cap);
-        }
-
-        /// <summary>调整每关 1UP 上限（面板改设置时立即生效），越界夹取到 1~3。</summary>
-        public void SetCap(int cap)
-        {
-            if (cap < MinCap) cap = MinCap;
-            if (cap > MaxCap) cap = MaxCap;
-            Cap = cap;
         }
 
         /// <summary>
@@ -84,23 +59,21 @@ namespace DeathRewind.Core
         }
 
         /// <summary>
-        /// 记一次击杀。返回 true 表示**刚好凑满 100 分、发放了一次额外 1UP**（需要播音效）。
-        /// 增强模式关闭时什么都不做（不计分、不发放）。
+        /// 记一次击杀得分。返回 true 表示**刚好凑满 100 分、发放了一次额外 1UP**（需要播音效）。
+        /// 积分档位见 <see cref="KillScore"/>（BOSS 55 / 风暴 25 / 雇佣兵·游荡者 15 / 其他 5）。
+        /// 不设每关上限：满 100 必发放，溢出分数结转（95+50=145 → 发放后剩 45）。
+        /// 两个前提：增强模式开启，且**本关已死亡用掉过回溯机会**（UpsUsed > 0）——
+        /// 1UP 还没用掉时击杀不计分（先丢机会、再靠击杀赚回，不能没死就预攒）。
         /// </summary>
-        public bool AddKill(bool isBoss)
+        public bool AddKill(int points)
         {
             if (!Enhanced) return false;
-            Score += isBoss ? BossPoints : CreaturePoints;
+            if (UpsUsed <= 0) return false;   // 回溯机会还没用掉 → 不计分
+            if (points <= 0) return false;
+            Score += points;
             if (Score < PointsPerUp) return false;
 
-            if (AtCap)
-            {
-                // 已经拿满：不再发放，分数封顶（界面显示"已满"）
-                Score = PointsPerUp;
-                return false;
-            }
-
-            Score = 0;
+            Score -= PointsPerUp;
             UpsEarned++;
             return true;
         }

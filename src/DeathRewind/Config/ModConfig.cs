@@ -20,11 +20,9 @@ namespace DeathRewind.Config
         public double MaxRewindAge = 60;
         /// <summary>时间轴节点间隔（秒）：从最老节点向内按此步长取点。默认 10 → 60/50/40/30 四个节点。</summary>
         public double TimelineStep = 10;
-        /// <summary>增强模式：开启后积分可换 1UP、每关上限与复活冷却才生效。默认关闭（保持旧行为：每关一次复活）。</summary>
+        /// <summary>增强模式：开启后积分可换 1UP（不限次数）、复活冷却生效。默认关闭（保持旧行为：每关一次复活）。</summary>
         public bool EnhancedMode = false;
-        /// <summary>每关 1UP 上限（1~3）：保底 1 次复活，靠击杀积分可再赚。仅增强模式生效。</summary>
-        public int MaxRewinds = 1;
-        /// <summary>复活冷却间隔（秒）：只能用 30 / 60 / 90。第一次复活不受冷却限制。</summary>
+        /// <summary>复活冷却间隔（秒）：只能用 0 / 30 / 60 / 90（0 = 无冷却）。第一次复活不受冷却限制。仅增强模式生效。</summary>
         public int RewindCooldownSeconds = 60;
         public double SampleInterval = 0.25;
         public bool AutoRewind;
@@ -90,7 +88,6 @@ namespace DeathRewind.Config
                 cfg.AnchorCaptureBudgetMs = GetDouble(raw, "anchorCaptureBudgetMs", cfg.AnchorCaptureBudgetMs);
                 cfg.OneUpSound = GetBool(raw, "oneUpSound", cfg.OneUpSound);
                 cfg.OneUpSoundVolume = GetDouble(raw, "oneUpSoundVolume", cfg.OneUpSoundVolume);
-                cfg.MaxRewinds = GetInt(raw, "maxRewinds", cfg.MaxRewinds);
                 cfg.EnhancedMode = GetBool(raw, "enhancedMode", cfg.EnhancedMode);
                 cfg.RewindCooldownSeconds = GetInt(raw, "rewindCooldown", cfg.RewindCooldownSeconds);
             }
@@ -158,10 +155,11 @@ namespace DeathRewind.Config
         private static string _version;
 
         /// <summary>
-        /// 把 Ctrl+N 面板改动的设置写回 config.txt（只改这三行，其余内容原样保留）。
+        /// 把 Ctrl+N 面板改动的设置写回 config.txt（只改这两行，其余内容原样保留）。
         /// 这几项**不进 ModConfig 框架**（游戏内设置面板），否则框架的 ES3 值会盖掉面板写入的结果。
+        /// v1.0.14 起取消每关次数上限：旧配置里的 maxRewinds 行不再读取，原样保留无副作用。
         /// </summary>
-        public static bool SavePanelSettings(bool enhancedMode, int maxRewinds, int cooldownSeconds, out string error)
+        public static bool SavePanelSettings(bool enhancedMode, int cooldownSeconds, out string error)
         {
             error = null;
             try
@@ -173,7 +171,6 @@ namespace DeathRewind.Config
                 var lines = new List<string>();
                 if (File.Exists(path)) lines.AddRange(File.ReadAllLines(path));
                 ConfigFileLines.Upsert(lines, "enhancedMode", enhancedMode ? "true" : "false");
-                ConfigFileLines.Upsert(lines, "maxRewinds", maxRewinds.ToString(CultureInfo.InvariantCulture));
                 ConfigFileLines.Upsert(lines, "rewindCooldown", cooldownSeconds.ToString(CultureInfo.InvariantCulture));
                 File.WriteAllLines(path, lines);
                 return true;
@@ -202,12 +199,7 @@ namespace DeathRewind.Config
                 ModLog.LogWarning($"[DeathRewind] oneUpSoundVolume 非法（{OneUpSoundVolume}），收窄到 0~1");
                 OneUpSoundVolume = Math.Min(1, Math.Max(0, OneUpSoundVolume));
             }
-            if (MaxRewinds < 1 || MaxRewinds > 3)
-            {
-                ModLog.LogWarning($"[DeathRewind] maxRewinds 非法（{MaxRewinds}），回落 1");
-                MaxRewinds = 1;
-            }
-            if (RewindCooldownSeconds != 30 && RewindCooldownSeconds != 60 && RewindCooldownSeconds != 90)
+            if (RewindCooldownSeconds != 0 && RewindCooldownSeconds != 30 && RewindCooldownSeconds != 60 && RewindCooldownSeconds != 90)
             {
                 ModLog.LogWarning($"[DeathRewind] rewindCooldown 非法（{RewindCooldownSeconds}），回落 60");
                 RewindCooldownSeconds = 60;

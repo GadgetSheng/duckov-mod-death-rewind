@@ -54,7 +54,7 @@ namespace DeathRewind.Core
         /// </summary>
         public void SetDuration(double seconds)
         {
-            if (seconds <= 0) seconds = DefaultDuration;
+            if (seconds < 0) seconds = 0;   // 0 = 无冷却（合法档位），负数按 0 处理
             _duration = seconds;
         }
 

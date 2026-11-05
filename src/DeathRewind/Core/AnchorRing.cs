@@ -18,7 +18,6 @@ namespace DeathRewind.Core
         /// <summary>全局锚点上限（所有空间合计）。</summary>
         private int _capacityTotal;
         private double _maxAge;
-        private int _maxRewinds;
         private double _gridInterval;
 
         private double _gridOrigin;      // 网格原点（网格时间戳）
@@ -29,12 +28,12 @@ namespace DeathRewind.Core
 
         /// <param name="capacityPerScene">每个空间的锚点配额（≥1）。</param>
         /// <param name="capacityTotal">全局锚点上限（≥ 每空间配额）。</param>
-        public AnchorRing(int capacityPerScene, int capacityTotal, double maxAge, int maxRewinds, double gridInterval)
+        /// <remarks>v1.0.14 起移除 maxRewinds：复活次数经济归 <c>ScoreState</c> 管，环不再有每关次数门槛。</remarks>
+        public AnchorRing(int capacityPerScene, int capacityTotal, double maxAge, double gridInterval)
         {
             _capacityPerScene = capacityPerScene < 1 ? 1 : capacityPerScene;
             _capacityTotal = capacityTotal < _capacityPerScene ? _capacityPerScene : capacityTotal;
             _maxAge = maxAge;
-            _maxRewinds = maxRewinds;
             _gridInterval = gridInterval;
         }
 
@@ -49,12 +48,11 @@ namespace DeathRewind.Core
         /// 运行时更新环参数（游戏内设置变更时调用）：保留已存锚点，仅调整容量/窗口上限/网格间隔，
         /// 并把下一条网格边界重置为"当前网格时间 + 新间隔"。
         /// </summary>
-        public void Reconfigure(int capacityPerScene, int capacityTotal, double maxAge, int maxRewinds, double gridInterval)
+        public void Reconfigure(int capacityPerScene, int capacityTotal, double maxAge, double gridInterval)
         {
             _capacityPerScene = capacityPerScene < 1 ? 1 : capacityPerScene;
             _capacityTotal = capacityTotal < _capacityPerScene ? _capacityPerScene : capacityTotal;
             _maxAge = maxAge;
-            _maxRewinds = maxRewinds;
             _gridInterval = gridInterval;
             _nextBoundary = GridTimestamp + gridInterval;
         }
@@ -240,9 +238,6 @@ namespace DeathRewind.Core
             result.Sort((x, y) => x.AbsTimestamp.CompareTo(y.AbsTimestamp));   // 旧 → 新
             return result;
         }
-
-        /// <summary>是否还有回溯机会：回退次数未用尽，且回溯窗口内存在可用锚点。</summary>
-        public bool CanRewind() => RewindCount < _maxRewinds && SelectWindow(null, _maxAge).Count > 0;
 
         /// <summary>
         /// 回退成功：移除更年轻的锚点（被丢弃时间线）、递增计数。

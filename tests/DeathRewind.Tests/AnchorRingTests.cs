@@ -47,7 +47,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void PollDueGridTimestamp_FiresOncePerInterval()
         {
-            var ring = new AnchorRing(4, 4, 60.0, 3, 60.0);
+            var ring = new AnchorRing(4, 4, 60.0, 60.0);
             ring.ResetGridTo(0.0, 0.0);
             Assert.Null(ring.PollDueGridTimestamp());            // 原点不是边界
             ring.SetTick(60.0);
@@ -60,7 +60,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void AllocateId_IsMonotonic_AndInsertKeepsIt()
         {
-            var ring = new AnchorRing(4, 4, 60.0, 3, 60.0);
+            var ring = new AnchorRing(4, 4, 60.0, 60.0);
             int id = ring.AllocateId();
             var a = new Anchor { Id = id };
             ring.Insert(a, new List<Anchor>());
@@ -71,7 +71,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void Insert_AssignsId_WhenNotPreallocated()
         {
-            var ring = new AnchorRing(4, 4, 60.0, 3, 60.0);
+            var ring = new AnchorRing(4, 4, 60.0, 60.0);
             var a = new Anchor();
             ring.Insert(a, new List<Anchor>());
             Assert.True(a.Id > 0);
@@ -80,7 +80,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void Insert_EvictsOldestBeyondCapacity()
         {
-            var ring = new AnchorRing(2, 2, 60.0, 3, 60.0);
+            var ring = new AnchorRing(2, 2, 60.0, 60.0);
             var evicted = new List<Anchor>();
             ring.Insert(Make(10, 10), evicted);
             ring.Insert(Make(20, 20), evicted);
@@ -93,7 +93,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectWindow_KeepsOnlyAnchorsWithinMaxAge()
         {
-            var ring = new AnchorRing(16, 16, 60.0, 3, 5.0);
+            var ring = new AnchorRing(16, 16, 60.0, 5.0);
             SeedGrid(ring, "Map", 300.0, 10.0, 10);      // 年龄 0/10/20/.../90
             ring.SetTick(300.0);
 
@@ -107,7 +107,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_PicksFourNodesAt60_50_40_30()
         {
-            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);         // 年龄 0/5/10/.../60
             ring.SetTick(300.0);
 
@@ -122,7 +122,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_PicksClosestAnchorWhenGridIsOffset()
         {
-            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 5.0);
             // 网格相对目标年龄错开 2.5s：年龄 57.5/52.5/47.5/42.5/37.5/32.5
             SeedAges(ring, "Map", 300.0, new double[] { 57.5, 52.5, 47.5, 42.5, 37.5, 32.5 });
             ring.SetTick(300.0);
@@ -138,7 +138,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_IgnoresAnchorsOlderThanMaxAge()
         {
-            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);         // 含年龄 65/70 的老锚点
             ring.SetTick(300.0);
 
@@ -151,7 +151,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_ReturnsEmpty_WhenSceneTooYoung()
         {
-            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 2);          // 年龄 0/5 —— 远不到 30s
             ring.SetTick(300.0);
 
@@ -161,7 +161,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_FiltersByScene()
         {
-            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);
             SeedGrid(ring, "Room_A", 300.0, 5.0, 13);
             ring.SetTick(300.0);
@@ -176,7 +176,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAge_SkipsConsumedAnchors()
         {
-            var ring = new AnchorRing(32, 32, 60.0, 3, 5.0);
+            var ring = new AnchorRing(32, 32, 60.0, 5.0);
             SeedGrid(ring, "Map", 300.0, 5.0, 13);
             ring.SetTick(300.0);
 
@@ -190,7 +190,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAgeAcrossSpaces_PrefersCurrentSpace()
         {
-            var ring = new AnchorRing(4, 8, 60.0, 3, 5.0);
+            var ring = new AnchorRing(4, 8, 60.0, 5.0);
             SeedAges(ring, "Map", 300.0, new double[] { 60.0, 50.0, 40.0, 30.0 });
             SeedAges(ring, "Cave", 300.0, new double[] { 58.0 });
             ring.SetTick(300.0);
@@ -208,7 +208,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAgeAcrossSpaces_FallsBackToOtherSpaces()
         {
-            var ring = new AnchorRing(4, 8, 60.0, 3, 5.0);
+            var ring = new AnchorRing(4, 8, 60.0, 5.0);
             SeedAges(ring, "Map", 300.0, new double[] { 60.0, 50.0, 40.0, 30.0 });
             SeedAges(ring, "Cave", 300.0, new double[] { 8.0 });     // 刚进洞，没有任何目标年龄可用
             ring.SetTick(300.0);
@@ -221,7 +221,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void SelectByAgeAcrossSpaces_IgnoresSpacesOutsideLevel()
         {
-            var ring = new AnchorRing(4, 8, 60.0, 3, 5.0);
+            var ring = new AnchorRing(4, 8, 60.0, 5.0);
             SeedAges(ring, "Map", 300.0, new double[] { 60.0, 50.0 });
             SeedAges(ring, "OldLevel", 300.0, new double[] { 40.0, 30.0 });
             ring.SetTick(300.0);
@@ -235,7 +235,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void CommitRewind_KeepsTargetSelectable_RemovesYounger()
         {
-            var ring = new AnchorRing(16, 16, 60.0, 3, 5.0);
+            var ring = new AnchorRing(16, 16, 60.0, 5.0);
             var evicted = new List<Anchor>();
             var older = Make(200, 200);
             var target = Make(240, 240);
@@ -260,22 +260,10 @@ namespace DeathRewind.Tests
         }
 
         [Fact]
-        public void CanRewind_RespectsMaxRewinds()
-        {
-            var ring = new AnchorRing(4, 4, 60.0, 1, 60.0);
-            var evicted = new List<Anchor>();
-            var a = Make(240, 240);
-            ring.Insert(a, evicted);
-            ring.CommitRewind(a, new List<Anchor>());
-            ring.SetTick(300.0);
-            Assert.False(ring.CanRewind());
-        }
-
-        [Fact]
         public void Insert_EvictsOnlySameSceneBeyondPerSceneQuota()
         {
             // 每空间配额 2、全局上限 4：Map 的第 3 个锚点只挤掉 Map 自己的旧锚点
-            var ring = new AnchorRing(2, 4, 60.0, 3, 60.0);
+            var ring = new AnchorRing(2, 4, 60.0, 60.0);
             var evicted = new List<Anchor>();
             ring.Insert(Make(10, 10, "Map"), evicted);
             ring.Insert(Make(20, 20, "Map"), evicted);
@@ -297,7 +285,7 @@ namespace DeathRewind.Tests
         public void Insert_EvictsOldestGloballyBeyondTotalCapacity()
         {
             // 每空间配额 2、全局上限 2：两个空间各 1 个锚点，共 2 个不淘汰
-            var ring = new AnchorRing(2, 2, 60.0, 3, 60.0);
+            var ring = new AnchorRing(2, 2, 60.0, 60.0);
             var evicted = new List<Anchor>();
             ring.Insert(Make(10, 10, "Map"), evicted);
             ring.Insert(Make(20, 20, "Cave"), evicted);
@@ -313,7 +301,7 @@ namespace DeathRewind.Tests
         public void AnchorsOfDifferentSpacesCoexist()
         {
             // 切空间不再丢锚点：两个空间的锚点可以同时留在环里
-            var ring = new AnchorRing(4, 8, 60.0, 3, 60.0);
+            var ring = new AnchorRing(4, 8, 60.0, 60.0);
             var evicted = new List<Anchor>();
             ring.Insert(Make(10, 10, "Map"), evicted);
             ring.Insert(Make(20, 20, "Cave"), evicted);
@@ -326,7 +314,7 @@ namespace DeathRewind.Tests
         [Fact]
         public void GridOriginReset_KeepsExistingAnchorsSelectable()
         {
-            var ring = new AnchorRing(16, 16, 60.0, 3, 5.0);
+            var ring = new AnchorRing(16, 16, 60.0, 5.0);
             var evicted = new List<Anchor>();
             var a = Make(240, 240);
             ring.Insert(a, evicted);

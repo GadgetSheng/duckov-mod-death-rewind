@@ -30,6 +30,8 @@ namespace DeathRewind.Unity
         private static byte[] _wavBytes;        // 内嵌 WAV 原始字节
         private static AudioClip _clip;         // Unity 兜底路径
         private static AudioSource _source;
+        private static FMOD.Sound _fmodSound;   // FMOD core 通路：内嵌 WAV 解码后的声音（懒创建，Dispose 时释放）
+        private static bool _hasFmodSound;
         private static bool _warned;
         private static bool _readyLogged;
 
@@ -48,9 +50,36 @@ namespace DeathRewind.Unity
             }
         }
 
+        /// <summary>
+        /// 播放**内嵌的 oneup.wav**（增强模式攒满 100 分发放 1UP 时的提示音）。
+        /// 通路：FMOD core（<c>RuntimeManager.CoreSystem.playSound</c>）——Unity AudioSource 在游戏里
+        /// 实测无声（见类注释），所以自定义音频必须走 FMOD 输出；走 master 通道组，跟随游戏音量/静音。
+        /// FMOD 不可用时兜底 Unity AudioSource（聊胜于无）。
+        /// </summary>
+        public static void PlayWav(float volume)
+        {
+            if (volume <= 0f) return;
+            try
+            {
+                if (PlayWavViaFmod(volume)) return;
+                PlayUnityFallback(volume);
+            }
+            catch (Exception e)
+            {
+                WarnOnce($"WAV 播放失败: {e.Message}");
+            }
+        }
+
         /// <summary>释放音频资源（Mod 停用时调用）。</summary>
         public static void Dispose()
         {
+            if (_hasFmodSound)
+            {
+                try { _fmodSound.release(); }
+                catch { /* FMOD 可能先于 Mod 关停，忽略 */ }
+                _hasFmodSound = false;
+                _fmodSound = default;
+            }
             if (_source != null)
             {
                 UnityEngine.Object.Destroy(_source);
@@ -62,6 +91,44 @@ namespace DeathRewind.Unity
                 _clip = null;
             }
             _wavBytes = null;
+        }
+
+        /// <summary>FMOD core 播内嵌 WAV：懒解码一次，之后每次 playSound 复用；失败返回 false 走 Unity 兜底。</summary>
+        private static bool PlayWavViaFmod(float volume)
+        {
+            var bytes = LoadResourceBytes();
+            if (bytes == null)
+            {
+                WarnOnce("内嵌 oneup.wav 资源缺失");
+                return false;
+            }
+            var system = FMODUnity.RuntimeManager.CoreSystem;   // FMOD 未就绪时可能抛异常（外层捕获）
+            if (!_hasFmodSound)
+            {
+                // OPENMEMORY 需要显式 length；CREATESAMPLE 在创建时立即解码为 PCM，
+                // 之后 FMOD 不再引用字节缓冲（缓冲仍被 _wavBytes 缓存，生命周期安全）
+                var exinfo = new FMOD.CREATESOUNDEXINFO();
+                exinfo.cbsize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(FMOD.CREATESOUNDEXINFO));
+                exinfo.length = (uint)bytes.Length;
+                var result = system.createSound(bytes, FMOD.MODE.OPENMEMORY | FMOD.MODE.CREATESAMPLE, ref exinfo, out var sound);
+                if (result != FMOD.RESULT.OK)
+                {
+                    WarnOnce($"FMOD createSound 失败: {result}");
+                    return false;
+                }
+                _fmodSound = sound;
+                _hasFmodSound = true;
+            }
+            // ChannelGroup 传 default（零句柄 = master 组，跟随游戏音量/静音）
+            var played = system.playSound(_fmodSound, default(FMOD.ChannelGroup), false, out var channel);
+            if (played != FMOD.RESULT.OK)
+            {
+                WarnOnce($"FMOD playSound 失败: {played}");
+                return false;
+            }
+            channel.setVolume(Mathf.Clamp01(volume));
+            LogReady("FMOD core playSound（内嵌 oneup.wav）");
+            return true;
         }
 
         /// <summary>

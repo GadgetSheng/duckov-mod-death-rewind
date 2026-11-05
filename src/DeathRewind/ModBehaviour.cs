@@ -24,6 +24,8 @@ namespace DeathRewind
         private readonly ScoreState _score = new ScoreState();
         /// <summary>复活冷却（纯逻辑，用掉一次复活后开始计时）。</summary>
         private readonly RewindCooldown _cooldown = new RewindCooldown();
+        /// <summary>兼容性检查结论（与其它 Mod 的冲突：Harmony 补丁重叠、快捷键、设置来源、重复副本）。</summary>
+        private CompatReport _compatReport;
         private LevelHooks _hooks;
         private EntitySampler _sampler;
         private AnchorBuilder _builder;
@@ -64,6 +66,8 @@ namespace DeathRewind
         public RewindCooldown RewindCooldown => _cooldown;
         /// <summary>当前配置（面板读取与写回用）。</summary>
         public ModConfig Config => _config;
+        /// <summary>兼容性检查结论（启动时扫一次；面板打开时按节流刷新，见 <see cref="RefreshCompatReport"/>）。</summary>
+        public CompatReport CompatReport => _compatReport;
 
         /// <summary>死亡裁决期间置 true：禁止 OnLevelEnded 清空锚点环（楼层切换时 RaidEnd/场景 unload 可能误触发）。</summary>
         public bool SuppressLevelEnd
@@ -76,22 +80,38 @@ namespace DeathRewind
         public Anchor GetLevelStartAnchor(string sceneKey)
             => sceneKey != null && _levelStartAnchors.TryGetValue(sceneKey, out var a) ? a : null;
 
+        /// <summary>被判为重复副本后置位：不再跑任何逻辑（Update/OnGUI/补丁全部停摆）。</summary>
+        private bool _stoodDown;
+
         protected override void OnAfterSetup()
         {
             ModLog.Log("[DR-Trace] ====== Log channel test: if you see this, Log works ======");
+
+            // 重复实例仲裁：游戏会同时加载创意工坊副本与本地副本（CODE_MAP §10.1），
+            // 两份是不同程序集实例 → 各自建锚点环、各自抓缩略图、各自驱动一枚 HUD 硬币。
+            // 仲裁扫的是 ModBehaviour **实例**（字节加载的程序集不进 AppDomain.GetAssemblies，扫不到），
+            // 判据用基类 info.path 指向的 DLL：本地副本 > 写入时间新 > MVID。
+            if (!InstanceGuard.TryBecomePrimary(info, out string guardReason))
+            {
+                _stoodDown = true;
+                ModLog.LogImportant($"[DeathRewind] 检测到更新的重复副本（{guardReason}），本实例停用");
+                return;
+            }
+            ModLog.LogImportant($"[DeathRewind] 实例仲裁：{guardReason}");
+
             _config = ModConfig.Load();
             ModLog.Log($"[DeathRewind] mods root: {Duckov.Modding.ModManager.DefaultModFolderPath}");
             RegisterModConfigOptions();
             if (!_config.Enabled) { ModLog.Log("[DeathRewind] disabled by config"); return; }
 
             _clock = new RewindClock();
-            _ring = new AnchorRing(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            // v1.0.14 起环不再有每关次数门槛：复活次数经济归 ScoreState 管（保底 1 次 + 击杀积分赚回）
+            _ring = new AnchorRing(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.AnchorInterval);
             // 网格原点必须在 Mod 启动时就设定：否则第一条边界落在 tick=0，会立刻触发一次无意义的锚点构建
             _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
             _sampler = new EntitySampler(_store, _config.AnchorCount, _config.AnchorInterval);
             _sampler.EnemyKilled += OnEnemyKilled;   // 击杀 → 积分 → 1UP（增强模式关闭时不计分）
             _score.SetEnhanced(_config.EnhancedMode);
-            _score.SetCap(_config.MaxRewinds);
             _cooldown.Enabled = _config.EnhancedMode;   // 增强模式关闭 → 无冷却（保持旧行为）
             _cooldown.SetDuration(_config.RewindCooldownSeconds);
             _builder = new AnchorBuilder(_config, _store, _ring, _sampler, CaptureAnchorThumbnail);   // 锚点采集需要按 ID 找回敌人物品
@@ -140,6 +160,47 @@ namespace DeathRewind
             }
             // 缩略图改为锚点构建同帧抓取（见 CaptureAnchorThumbnail），不再需要端帧循环
             ModLog.Log("[DeathRewind] initialized");
+
+            // 兼容性检查：此刻本 Mod 的补丁已注册，能看到 Harmony 补丁表里的重叠
+            RefreshCompatReport();
+        }
+
+        /// <summary>
+        /// 重新扫描与其它 Mod 的兼容性并写日志（启动时自动跑一次；设置面板里也可手动触发）。
+        /// 检出：重复副本、Harmony 补丁目标重叠、多份 0Harmony、快捷键冲突、设置来源不一致。
+        /// </summary>
+        /// <param name="log">是否把结果写进日志（面板里的节流刷新传 false，避免刷屏）。</param>
+        public CompatReport RefreshCompatReport(bool log = true)
+        {
+            try
+            {
+                _compatReport = DeathRewind.Compat.ModCompatScanner.Scan(_config);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DeathRewind] 兼容性扫描失败: {e}");
+                return _compatReport;
+            }
+            if (_compatReport == null) return null;
+            if (!log) return _compatReport;
+
+            ModLog.LogImportant($"[DeathRewind] 兼容性检查：{_compatReport.Summary}");
+            foreach (var issue in _compatReport.Issues)
+            {
+                switch (issue.Severity)
+                {
+                    case CompatSeverity.Error:
+                        ModLog.LogImportant($"[DeathRewind] [兼容性·错误] {issue.Title} — {issue.Detail}");
+                        break;
+                    case CompatSeverity.Warning:
+                        ModLog.LogWarning($"[DeathRewind] [兼容性·警告] {issue.Title} — {issue.Detail}");
+                        break;
+                    default:
+                        ModLog.Log($"[DeathRewind] [兼容性] {issue.Title} — {issue.Detail}");
+                        break;
+                }
+            }
+            return _compatReport;
         }
 
         /// <summary>
@@ -170,7 +231,7 @@ namespace DeathRewind
         {
             if (key == null || !key.StartsWith(ModConfigBridge.Prefixed(""))) return;
             _config.ReloadFromModConfig();
-            _ring?.Reconfigure(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
+            _ring?.Reconfigure(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.AnchorInterval);
             ModLog.Log($"[DeathRewind] 游戏内设置变更生效: {key} " +
                       $"(interval={_config.AnchorInterval:0.#}s count={_config.AnchorCount} maxAge={_config.MaxRewindAge:0.#}s step={_config.TimelineStep:0.#}s scope={_config.RewindScope})");
         }
@@ -187,6 +248,34 @@ namespace DeathRewind
             ThumbnailCapture.Dispose();       // 释放抓图相机
             _hooks?.Uninstall();
             ModLog.Log("[DeathRewind] deactivated");
+        }
+
+        /// <summary>
+        /// 被判定为重复副本时，由胜出的那份实例调用（反射跨程序集调用，见 <see cref="InstanceGuard"/>）。
+        /// 卸掉本实例的补丁并停摆：本进程里只剩一份 DeathRewind 在跑。
+        /// </summary>
+        public void DeathRewindStandDown()
+        {
+            if (_stoodDown) return;
+            _stoodDown = true;
+            try
+            {
+                ReleaseTimeScale();
+                DeathInterceptor.Uninstall();
+                EnemyPersistencePatch.Uninstall();
+                EnemyLootboxPatch.Uninstall();
+                RewindIndicator.Dispose();
+                OneUpSound.Dispose();
+                RewindSettingsPanel.Dispose();
+                _sampler?.UnsubscribeDeathEvents();
+                ThumbnailCapture.Dispose();
+                _hooks?.Uninstall();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[DeathRewind] 停用重复副本时出错: {e}");
+            }
+            ModLog.LogImportant("[DeathRewind] 本实例已被更新的副本取代，已停用");
         }
 
         /// <summary>
@@ -224,7 +313,9 @@ namespace DeathRewind
 
         private void Update()
         {
+            if (_stoodDown) return;
             if (_config == null || !_config.Enabled) return;
+            ThumbnailCapture.Tick();   // 主线程回收后台编码完 PNG 的纹理
             _clock.Tick(Time.unscaledTime);
             _ring.SetTick(_clock.CurrentTick);
 
@@ -317,18 +408,19 @@ namespace DeathRewind
                 }
             }
 
-            // HUD "1up" 硬币指示：还有可用的复活机会时显示（保底 1 次 + 积分赚到的），
-            // 用掉后/冷却期内自动隐藏；HUD 未就绪时内部带 1s 重试节流
-            // 基地（Base）是安全屋没有回溯场景，不显示 1UP
+            // HUD "1up" 硬币指示（四态）：可用（全亮）/
+            // 冷却中（置灰+删除线 1UP+倒计时——重新获得的 1UP 未成熟，发放时刻起算）/
+            // 用掉（仅增强模式：删除线 1UP + 当前积分，攒满 100 变回实体）/ 隐藏（默认模式用掉即消失、基地、环未就绪）
             bool hasRevive = _score.Held > 0;
             bool cooldownReady = _cooldown.IsReady(_clock.CurrentTick);
-            bool shouldShow = _ring != null
-                && hasRevive
-                && cooldownReady
-                && !LevelAccess.InBaseLevel;
-            RewindIndicator.SetAvailable(shouldShow);
+            bool enhanced = _score.Enhanced;
+            bool showCoin = _ring != null && !LevelAccess.InBaseLevel && (hasRevive || enhanced);
+            double cooldownRemain = cooldownReady ? 0 : _cooldown.Remaining(_clock.CurrentTick);
+            RewindIndicator.SetState(_score, showCoin, cooldownReady, cooldownRemain);
+            // 「1UP」FMOD 提示音（UI/level_up）保留给默认模式；增强模式改由 +1UP 发放时的自定义 oneup.wav 提示
+            bool shouldShow = showCoin && hasRevive && cooldownReady && !enhanced;
 
-            // 「1UP」提示音：每关第一次出现回溯机会时响一次（与 HUD 硬币指示同一判定）。
+            // 「1UP」提示音：每关"回溯机会变为可用"的瞬间响一次（冷却结束/赚到 1UP 即就绪）。
             // 关卡生命周期武装/解除（见 HandleLevelStarted / HandleLevelEnded），
             // 因此主菜单里不会响、换关卡才会再响。
             bool oneUpCue = _oneUpCue.ShouldPlay(shouldShow);
@@ -344,46 +436,49 @@ namespace DeathRewind
             if (ctrl && Input.GetKeyDown(KeyCode.N)) RewindSettingsPanel.Toggle();
         }
 
-        /// <summary>击杀回调：加分；凑满 100 分发放一次额外 1UP 并播提示音。</summary>
-        private void OnEnemyKilled(string id, bool isBoss)
+        /// <summary>击杀回调：按目标类型加分（带星精英额外 +5）；凑满 100 分发放一次额外 1UP 并播提示音。</summary>
+        private void OnEnemyKilled(string id, bool isBoss, bool isStarElite, string nameKey)
         {
-            bool granted = _score.AddKill(isBoss);
+            int points = KillScore.PointsFor(nameKey, isBoss, isStarElite);
+            bool granted = _score.AddKill(points);
             // 击杀日志走普通通道（每次击杀都打会刷屏）；发放 1UP 是决策级事件，始终输出
-            ModLog.Log($"[DeathRewind] 玩家击杀 {(isBoss ? "BOSS" : "生物")} → 得分 {_score.Score}/{ScoreState.PointsPerUp}");
+            string category = KillScore.Describe(nameKey, isBoss);
+            if (isStarElite) category = "带星精英·" + category;
+            ModLog.Log($"[DeathRewind] 玩家击杀 {category}（{nameKey ?? "?"}）→ +{points} 分，得分 {_score.Score}/{ScoreState.PointsPerUp}");
             if (granted)
             {
-                ModLog.LogImportant($"[DeathRewind] 积分满 {ScoreState.PointsPerUp} → +1UP！剩余 {_score.Held} 次");
-                if (_config != null) OneUpSound.Play((float)_config.OneUpSoundVolume);
+                ModLog.LogImportant($"[DeathRewind] 积分满 {ScoreState.PointsPerUp} → +1UP！剩余 {_score.Held} 次，冷却 {_cooldown.Duration:0} 秒（发放时刻起算）");
+                // 冷却从"重新获得 1UP"的时刻起算：冷却期内这枚 1UP 不可用（HUD 显示删除线+倒计时），归零后才能再次复活
+                _cooldown.Start(_clock.CurrentTick);
+                // 自定义提示音 oneup.wav（内嵌资源，走 FMOD core 通路——Unity AudioSource 在游戏里无声）。
+                // 发放只在增强模式发生（AddKill 有 Enhanced 门控）；oneUpSound 开关同时管默认模式的 FMOD 提示音
+                if (_config != null && _config.OneUpSound) OneUpSound.PlayWav((float)_config.OneUpSoundVolume);
             }
         }
 
-        /// <summary>回退成功：扣掉一次 1UP 并开始复活冷却（回退失败不扣）。</summary>
+        /// <summary>回退成功：扣掉一次 1UP（回退失败不扣）。复活冷却不在此时启动——改由重新获得 1UP（积分满 100 发放）的时刻起算。</summary>
         public void ConsumeRewind()
         {
             _score.TryConsume();
-            _cooldown.Start(_clock.CurrentTick);
-            ModLog.LogImportant($"[DeathRewind] 复活机会已用：剩余 {_score.Held} 次，冷却 {_cooldown.Duration:0} 秒");
+            ModLog.LogImportant($"[DeathRewind] 复活机会已用：剩余 {_score.Held} 次");
         }
 
         /// <summary>设置面板改动：立即生效并写回 config.txt（供下次启动读取）。</summary>
-        public void ApplyPanelSettings(bool enhancedMode, int maxRewinds, int cooldownSeconds)
+        public void ApplyPanelSettings(bool enhancedMode, int cooldownSeconds)
         {
             if (_config == null) return;
             _config.EnhancedMode = enhancedMode;
-            _config.MaxRewinds = Mathf.Clamp(maxRewinds, 1, 3);
-            _config.RewindCooldownSeconds = (cooldownSeconds == 30 || cooldownSeconds == 60 || cooldownSeconds == 90)
+            _config.RewindCooldownSeconds = (cooldownSeconds == 0 || cooldownSeconds == 30 || cooldownSeconds == 60 || cooldownSeconds == 90)
                 ? cooldownSeconds
                 : 60;
             // 增强模式开关：切到关闭时经济状态清零（分数 / 已赚 1UP 不跨模式保留）
             _score.SetEnhanced(_config.EnhancedMode);
-            _score.SetCap(_config.MaxRewinds);
             _cooldown.Enabled = _config.EnhancedMode;
             _cooldown.SetDuration(_config.RewindCooldownSeconds);
-            _ring?.Reconfigure(_config.AnchorCount, _config.AnchorCapacity, _config.MaxRewindAge, _config.MaxRewinds, _config.AnchorInterval);
-            if (ModConfig.SavePanelSettings(_config.EnhancedMode, _config.MaxRewinds, _config.RewindCooldownSeconds, out var error))
+            if (ModConfig.SavePanelSettings(_config.EnhancedMode, _config.RewindCooldownSeconds, out var error))
             {
                 ModLog.LogImportant($"[DeathRewind] 设置已保存：增强模式={(_config.EnhancedMode ? "开" : "关")}，" +
-                                     $"每关 1UP 上限 {_config.MaxRewinds}，复活冷却 {_config.RewindCooldownSeconds} 秒");
+                                     $"复活冷却 {_config.RewindCooldownSeconds} 秒");
             }
             else
             {
@@ -412,8 +507,9 @@ namespace DeathRewind
             _levelStartAnchors.Clear();
             _scenesWithStartAnchor.Clear();
             _oneUpCue.OnLevelStarted();   // 武装本关的「1UP」提示音
-            _score.ResetLevel(_config.MaxRewinds);   // 积分与 1UP 每关重算
+            _score.ResetLevel();   // 积分与 1UP 每关重算
             _cooldown.Reset();
+            ThumbnailCapture.ResetStatusLog();   // 每关打一条抓图状态，便于实机核对
             // 换关卡：玩家会被送到新地图的出生点 → 坐标稳定性重新计时
             _hasLastPlayerPos = false;
             _playerStable = false;
@@ -444,7 +540,7 @@ namespace DeathRewind
             _sampler.ResetRegistry();
             AnchorBuilder.DeleteAllAnchorFiles();
             _oneUpCue.OnLevelEnded();     // 解除武装，等下一关开始
-            _score.ResetLevel(_config.MaxRewinds);
+            _score.ResetLevel();
             _cooldown.Reset();
             ModLog.Log("[DeathRewind] level ended: state cleared");
         }
@@ -504,6 +600,7 @@ namespace DeathRewind
 
         private void OnGUI()
         {
+            if (_stoodDown) return;
             // 死亡裁决面板（IMGUI 不受 timeScale=0 影响）
             DeathInterceptor.DrawPrompt();
             // 游戏内设置面板（Ctrl+N）

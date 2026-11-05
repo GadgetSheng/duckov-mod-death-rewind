@@ -226,7 +226,7 @@ namespace DeathRewind.Harmony
 
             var ring = _owner != null ? _owner.Ring : null;
             if (ring == null) return true;
-            // 复活机会由经济系统决定：保底 1 次 + 击杀积分赚到的（受 maxRewinds 上限约束）
+            // 复活机会由经济系统决定：保底 1 次 + 击杀积分赚回（不限次数）
             var score = _owner.ScoreState;
             if (score != null && score.Held <= 0)
             {
@@ -242,7 +242,7 @@ namespace DeathRewind.Harmony
             }
 
             // 候选节点（含起点锚点回退：场景太新、窗口内没有匹配节点时回到进图那一刻）。
-            // 不用 ring.CanRewind() 做门槛：它只看"窗口内有没有锚点"，进图 60s 内会误判"无合格锚点"。
+            // 不用锚点环做门槛：进图 60s 内会误判"无合格锚点"。
             var candidates = BuildCandidates(ring);
             if (candidates.Count == 0)
             {
@@ -469,6 +469,48 @@ namespace DeathRewind.Harmony
         }
 
         /// <summary>
+        /// 直接校正 HUD 状态条（左下角 HP/水/耐力，<c>Duckov.UI.BarDisplays.BarDisplayController</c>
+        /// 家族）的填充率。<paramref name="logFix"/> 为 true 时实际发生校正才打 LogImportant。
+        /// </summary>
+        private static void FixHudBarFills(bool logFix = false)
+        {
+            try
+            {
+                var ctrlType = AccessTools.TypeByName("Duckov.UI.BarDisplays.BarDisplayController");
+                if (ctrlType == null) return;
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var obj in UnityEngine.Object.FindObjectsOfType(ctrlType, true))
+                {
+                    try
+                    {
+                        var ctrl = obj as MonoBehaviour;
+                        if (ctrl == null) continue;
+                        var t = ctrl.GetType();
+                        // Current/Max 是 protected virtual（HP/饥饿/口渴/耐力各实现一份）
+                        if (t.GetProperty("Current", flags)?.GetValue(ctrl) is not float cur) continue;
+                        if (t.GetProperty("Max", flags)?.GetValue(ctrl) is not float mx) continue;
+                        var bar = AccessTools.Field(ctrlType, "bar")?.GetValue(ctrl) as MonoBehaviour;
+                        if (bar == null) continue;
+                        // BarDisplay.fill 是私有 Image 字段
+                        if (AccessTools.Field(bar.GetType(), "fill")?.GetValue(bar) is not Image fill) continue;
+                        float target = mx > 0f ? Mathf.Clamp01(cur / mx) : 1f;
+                        if (!Mathf.Approximately(fill.fillAmount, target))
+                        {
+                            fill.fillAmount = target;
+                            if (logFix)
+                                ModLog.LogImportant($"[DeathRewind] HUD 状态条填充校正: {cur:0.#}/{mx:0.#} → {target:0.00}");
+                        }
+                    }
+                    catch { /* 单个控制器失败不影响其余 */ }
+                }
+            }
+            catch (Exception e)
+            {
+                ModLog.LogWarning($"[DeathRewind] HUD 状态条校正失败: {e.Message}");
+            }
+        }
+
+        /// <summary>
         /// 复活后的无敌守卫：回溯之后外部来源仍可能把主角置回无敌/死亡/加载态
         /// （游戏内置调试设置 OnlevelInited 会重放无敌设置、作弊热键 Ctrl+=、撤离流程等）。
         /// 15 秒实时窗口内每 0.5s 复检，发现翻回即复位并记日志；玩家真的再次死亡时立即让位。
@@ -481,6 +523,9 @@ namespace DeathRewind.Harmony
                 try
                 {
                     if (_interceptionActive) yield break;   // 已进入新的死亡拦截流程，让位
+                    // 解冻后前 1.5s 内持续校正 HUD 状态条填充：覆盖"HUD 在解冻后才重新启用
+                    // （OnEnable 的 Refresh 产生的 tween 又被 Kill）"或"结算界面关闭时才 KillAll"等时序
+                    if (i < 3) FixHudBarFills(logFix: i == 0);
                     var main = LevelManager.Instance?.MainCharacter;
                     var health = main?.Health;
                     if (health == null) continue;
@@ -676,6 +721,13 @@ namespace DeathRewind.Harmony
             {
                 ModLog.LogWarning($"[DeathRewind] 血量 UI 事件补发失败: {e.Message}");
             }
+
+            // 3b) HUD 状态条（左下角 HP/水/耐力）填充直接校正：BarDisplay.SetValue 的文本立即生效、
+            //     填充走 DOTween（DOFillAmount，scaled time）。回溯冻结窗口内补发事件产生的"充能回满"
+            //     tween 拿不到推进时间，还可能被结算界面关闭路径的 DOTween.Kill 杀掉 → 文本满值、填充空置。
+            //     这里绕过事件与 tween 直接写 fillAmount（KillAll 只杀 tween 不改数值，直接写入能存活；
+            //     幸存的 tween 之后推进到同一目标值，不会打架）。解冻后 PostReviveGuard 前几次复检还会再校正。
+            FixHudBarFills();
 
             // 4) 头顶血条重建：HealthBar.DeathTask（协程）在玩家死亡时会把 HealthBar 隐藏/移入对象池。
             //    我们补发 OnHealthChange 只能刷新已有条目的填充率，若条目本身已被销毁/隐藏则无效。
