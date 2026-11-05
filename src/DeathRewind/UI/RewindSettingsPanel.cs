@@ -42,12 +42,9 @@ namespace DeathRewind.UI
         private static GUIStyle _toggleOnStyle;
         private static GUIStyle _toggleOffStyle;
         private static GUIStyle _footerStyle;
-        private static GUIStyle _issueErrorStyle;
-        private static GUIStyle _issueWarnStyle;
-        private static GUIStyle _issueInfoStyle;
 
-        /// <summary>上次兼容性扫描的时刻（面板打开时按 5 秒节流刷新）。</summary>
-        private static float _lastCompatScanAt = -999f;
+        /// <summary>面板内容的实测高度（上一帧量得，首帧用保守默认值）。</summary>
+        private static float _contentHeight = 470f;
 
         /// <summary>面板是否打开。</summary>
         public static bool IsOpen => _open;
@@ -75,11 +72,12 @@ namespace DeathRewind.UI
             if (!_open || owner == null) return;
             EnsureStyles();
 
-            // 面板高度随内容增长（新增了兼容性区块），但不超过屏幕高度
-            float panelHeight = Mathf.Min(660f, Mathf.Max(360f, Screen.height - 48f));
+            // 面板高度贴合内容实测值（上一帧量得），且不超过屏幕高度
+            float maxHeight = Mathf.Max(360f, Screen.height - 48f);
+            float panelHeight = Mathf.Min(maxHeight, _contentHeight);
             var area = new Rect(Screen.width - 508f, 24f, 484f, panelHeight);
             GUI.Box(area, GUIContent.none);
-            GUILayout.BeginArea(new Rect(area.x + 20f, area.y + 16f, area.width - 40f, area.height - 32f));
+            GUILayout.BeginArea(new Rect(area.x + 20f, area.y + 16f, area.width - 40f, maxHeight - 32f));
 
             // 标题行
             GUILayout.BeginHorizontal();
@@ -158,71 +156,15 @@ namespace DeathRewind.UI
 
             GUI.enabled = previousEnabled;
 
-            GUILayout.Space(8f);
-            DrawSeparator();
-            DrawCompatSection(owner);
-
             GUILayout.Space(10f);
             if (GUILayout.Button("关闭 (Ctrl+N)", _footerStyle, GUILayout.Height(34f))) Close();
+
+            // 内容实测：取「关闭」按钮的下沿 + 上下内边距，供下一帧确定面板高度
+            if (Event.current.type == EventType.Repaint)
+            {
+                _contentHeight = Mathf.Clamp(GUILayoutUtility.GetLastRect().yMax - area.y + 16f, 360f, 900f);
+            }
             GUILayout.EndArea();
-        }
-
-        /// <summary>
-        /// 兼容性区块：与其它 Mod 的冲突检测结果（Harmony 补丁重叠、重复副本、快捷键、设置来源）。
-        /// 面板打开时按 5 秒节流重新扫描（覆盖"别的 Mod 晚于本 Mod 加载"的情况）。
-        /// </summary>
-        private static void DrawCompatSection(ModBehaviour owner)
-        {
-            GUILayout.Label("兼容性", _sectionStyle);
-
-            if (owner == null) return;
-            if (Time.realtimeSinceStartup - _lastCompatScanAt > 5f)
-            {
-                _lastCompatScanAt = Time.realtimeSinceStartup;
-                owner.RefreshCompatReport(log: false);
-            }
-
-            var report = owner.CompatReport;
-            if (report == null)
-            {
-                GUILayout.Label("尚未扫描（打开面板即自动检测）", _hintStyle);
-                return;
-            }
-
-            GUILayout.Label(report.Summary, _hintStyle);
-
-            foreach (var issue in report.Issues)
-            {
-                string marker = issue.Severity == CompatSeverity.Error ? "× "
-                    : issue.Severity == CompatSeverity.Warning ? "! " : "· ";
-                string text = marker + issue.Title;
-                if (!string.IsNullOrEmpty(issue.Detail)) text += "\n    " + issue.Detail;
-                var style = IssueStyleFor(issue.Severity);
-                GUILayout.Label(text, style);
-            }
-
-            if (report.OurHotkeys.Count > 0)
-            {
-                GUILayout.Label("本 Mod 快捷键：" + string.Join("、", report.OurHotkeys.ToArray()), _hintStyle);
-            }
-
-            if (GUILayout.Button("重新检测", _footerStyle, GUILayout.Height(26f)))
-            {
-                _lastCompatScanAt = Time.realtimeSinceStartup;
-                owner.RefreshCompatReport(log: true);
-            }
-        }
-
-        /// <summary>按严重级别取条目样式（错误红 / 警告琥珀 / 提示灰）。</summary>
-        private static GUIStyle IssueStyleFor(CompatSeverity severity)
-        {
-            EnsureStyles();
-            switch (severity)
-            {
-                case CompatSeverity.Error: return _issueErrorStyle;
-                case CompatSeverity.Warning: return _issueWarnStyle;
-                default: return _issueInfoStyle;
-            }
         }
 
         /// <summary>积分规则网格的半宽单元：类别名在左、分值在右。</summary>
@@ -367,14 +309,6 @@ namespace DeathRewind.UI
             _footerStyle.normal.textColor = new Color(0.95f, 0.95f, 0.95f, 0.95f);
             _footerStyle.hover.background = MakeTexture(new Color(0.26f, 0.26f, 0.30f, 0.95f));
             _footerStyle.hover.textColor = Color.white;
-
-            // 兼容性条目：错误红 / 警告琥珀 / 提示灰（自动换行，明细缩进一行）
-            _issueErrorStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true, richText = false };
-            _issueErrorStyle.normal.textColor = new Color(0.95f, 0.42f, 0.38f);
-            _issueWarnStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true, richText = false };
-            _issueWarnStyle.normal.textColor = new Color(0.95f, 0.78f, 0.38f);
-            _issueInfoStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true, richText = false };
-            _issueInfoStyle.normal.textColor = new Color(0.82f, 0.84f, 0.88f, 0.85f);
 
             _stylesReady = true;
         }

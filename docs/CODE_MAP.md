@@ -74,7 +74,7 @@ src/DeathRewind/
 | `EnemyPolicy` | 敌人对象生命周期策略（纯逻辑）：只销毁 Mod 自己停用的对象；Boss 不可被回退移除 | `CanDestroy`、`CanRemoveLateSpawned` |
 | `OneUpCue` | 「1UP」提示音的触发判定（纯逻辑）：关卡开始后第一次出现回溯机会时响一次，每关一次 | `OnLevelStarted`、`OnLevelEnded`、`ShouldPlay` |
 | `WavPcm` | 16bit PCM WAV 解码（纯逻辑）：把内嵌音频还原成交错浮点采样 | `TryDecode` |
-| `ScoreState` | 积分与 1UP 记账（纯逻辑）：**本关用掉过回溯机会才计分**，按击杀目标类型得分（<c>KillScore</c>），满 100 分发 1UP（**不限次数**，溢出分数结转），每关重算；**增强模式关闭时不计分、只有保底 1 次** | `ResetLevel`、`SetEnhanced`、`AddKill`、`TryConsume` |
+| `ScoreState` | 积分与 1UP 记账（纯逻辑）：**本关用掉过回溯机会才计分**，按击杀目标类型得分（<c>KillScore</c>），满 100 分发 1UP（**不限次数**，溢出分数结转），每关重算；**增强模式关闭时不计分、只有保底 1 次**；切换增强模式**只翻转开关、保留 `Score`/`UpsEarned`/`UpsUsed`**（用掉机会后开增强不会凭空多出 1UP，关→开也不会吞掉已赚的 1UP） | `ResetLevel`、`SetEnhanced`、`AddKill`、`TryConsume` |
 | `KillScore` | 击杀分类与积分换算（纯逻辑）：按 `characterPreset.nameKey`（游戏自身敌人类型判据）分档 BOSS 55 / 风暴生物 25 / 雇佣兵·游荡者 15 / 其他 5，BOSS 优先；带星精英（头顶五角星）在所属档位上额外 +5 | `CategoryFor`、`PointsFor`、`Describe` |
 | `ModCompatAnalyzer` | 兼容性判定规则（纯逻辑）：把"已加载 Mod / Harmony 补丁重叠 / 0Harmony 版本 / 快捷键占用 / 设置来源"这些采集数据变成结论 | `Analyze`、`SameSettingValue` |
 | `CompatReport` / `CompatIssue` / `HotkeySpec` / `HotkeyClaim` | 兼容性结论的数据模型（纯逻辑）：严重级别、类别、快捷键规格（修饰键+主键）与占用声明 | `Issues`、`OurHotkeys`、`Summary`、`Parse`、`Overlaps`、`TriggersBareModifier` |
@@ -97,7 +97,7 @@ src/DeathRewind/
 | `ClosurePanel` | 在原生 YOU DIED 界面注入回溯按钮、提示文字、箭头、预览图与可拖拽时间轴 | `Create`、`SetRewindLabel`、`SelectedIndex`、`CandidateCount`、`NodeSelected`、`Layout`、`Dispose` |
 | `RewindIndicator` | HUD Buffs 状态栏首位的「1up」硬币指示，四态：可用（全亮+1UP）/ 冷却中（置灰+倒计时秒数）/ 用掉（仅增强模式：删除线1UP+当前积分）/ 隐藏 | `SetState`、`Dispose` |
 | `RewindPrompt` | 原生结算界面不可用时的 IMGUI 降级面板 | `Open`、`Close`、`Draw` |
-| `RewindSettingsPanel` | 游戏内设置面板（Ctrl+N）：增强模式开关 / 得分进度条 / 积分规则 / 复活冷却 + **兼容性区块**（冲突列表与「重新检测」按钮） | `Toggle`、`Close`、`Draw` |
+| `RewindSettingsPanel` | 游戏内设置面板（Ctrl+N）：增强模式开关 / 得分进度条 / 积分规则 / 复活冷却（兼容性结论只在启动日志输出，不在面板展示） | `Toggle`、`Close`、`Draw` |
 | `ModConfig` | config.txt 解析/校验 + 游戏内设置覆盖 + 调试开关 | `Load`、`Validate`、`FilePath` |
 | `PrivateStateAccessor` | 集中反射读写游戏私有字段，失败时降级 | `GetBool`、`SetBool`、`GetFloat`、`SetFloat`、`GetObject` |
 | `ModCompatScanner` | 兼容性扫描（采集真实证据）：已激活 Mod 列表、Harmony 补丁表重叠、0Harmony 版本、快捷键占用、config.txt vs 框架存档 | `Scan` |
@@ -207,6 +207,7 @@ sequenceDiagram
     WR-->>DI: ok / failed
     alt ok
       DI->>Ring: CommitRewind（删除更年轻锚点、计数+1；目标不 Consumed）
+      DI->>MB: ConsumeRewind + OnRewindSucceeded（清空旧时间线、重置网格/起点锚点）
       DI->>DI: ReleaseTimeScale + PostReviveFixup + PostReviveGuard(15s)
     else failed
       DI->>DI: ScheduleReplay（下一帧绕过前缀，重放原生死亡）
@@ -216,14 +217,15 @@ sequenceDiagram
 
 关键点：
 
-- **目标选择**：时间轴节点 = 从最老（`maxRewindAge`，默认 60s）向内按 `timelineStep`（默认 10s）取的目标年龄（60/50/40/30），每个目标取年龄最接近的锚点（容差 = max(step/2, 网格间隔/2)）。
+- **目标选择**：时间轴节点 = 从最老（`maxRewindAge`，默认 60s）向内按 `timelineStep`（默认 10s）取的目标年龄（60/50/40/30），每个目标取年龄最接近的锚点（容差 = max(step/2, 网格间隔/2)）。**窗口固定为 `maxRewindAge`，不随已用回溯次数扩展**——锚点环只保留 16×5s≈80s 数据，放大会指向环外导致节点错位。
   - **当前空间优先**：当前空间有匹配节点就用当前空间的；没有才用**本关卡其它空间**的锚点补位 → 时间轴上可能出现别的空间的节点（节点标签会补空间名，回溯按钮文案同步）。
   - 一个都匹配不到时回退到**当前空间最老的锚点**（通常是"进入该空间那一刻"的起点锚点，年龄需 ≥ 2s）。
   - 默认回溯目标 = **最老的节点**（≈60s）。
+- **回溯成功 = 时间线重算**：`ModBehaviour.OnRewindSucceeded()` 释放全部锚点采样载荷、`Ring.Clear()`、`ResetGridTo(当前 tick)`、清空起点锚点登记并 `AnchorBuilder.ResetCache()` → 旧时间线的锚点（含比目标更老的）一律丢弃，新节点始终是复活后新历史的 60/50/40/30，避免沿用旧时间线错位。
 - **跨地图保护**：锚点 `SceneKey` 与当前场景不一致 → 放弃回溯，放行原生死亡。
 - **接受死亡**：设置 `_bypassNext`，下一帧重放 `LevelManager.OnMainCharacterDie`，并用 `_suppressNextClosure` 跳过一次重复结算界面。
 - **复活后守卫**：15s 内每 0.5s 复检 `invincible` / `isDead` / `MultiSceneCore.IsLoading` / `mainDamageReceiver`，发现外部来源翻回即复位；**解冻后前 1.5s 连带执行 `FixHudBarFills`**。
-- **HUD 状态条填充校正**（`FixHudBarFills`）：左下角 HP/水/耐力条（`Duckov.UI.BarDisplays.BarDisplayController` 家族）的 `BarDisplay.SetValue` 文本立即生效、填充走 DOTween——冻结窗口内补发事件产生的回满 tween 拿不到推进时间或被结算界面关闭路径 Kill → 文本满值、填充空置（"复活后血条为空"）。绕过事件与 tween，反射读控制器 `Current/Max` 直接写 `fill.fillAmount`；`PostReviveFixup` 与守卫前 3 次复检都会执行。
+- **HUD 状态条填充校正**（`FixHudBarFills`）：左下角 HP/水/耐力条的 `BarDisplay.SetValue` 文本立即生效、填充走 DOTween——冻结窗口内补发事件产生的回满 tween 拿不到推进时间或被结算界面关闭路径 Kill → 文本满值、填充空置（"复活后血条为空"）。绕过事件与 tween 分三层矫正：(1) `BarDisplayController` 家族按 `Current/Max`；(2) 所有 `Duckov.UI.BarDisplay` 按条上「当前/上限」文字反算比例直接写 `fill.fillAmount`（覆盖无控制器驱动的 HUD 条）；(3) `HealthHUD`/`EnergyHUD`/`WaterHUD` 把 `percent` 缓存置 -1 迫使下一帧 `Update` 重写填充。`PostReviveFixup` 与守卫前 3 次复检都会执行。
 
 ---
 
@@ -361,11 +363,12 @@ sequenceDiagram
 - 1UP 存量与冷却倒计时**不在面板展示**（由 HUD 硬币指示器承载，见 §9.2）。
 - **复活冷却（秒）**：`− [无/30/60/90] +`（仅增强模式生效）。
 - 数值类选项一律用 `−/+` 按钮调节，**数值本身不可点、不允许直接输入**；当前值用金色徽章高亮（未选中项为深底），到边界的按钮自动置灰。
-- **兼容性**：面板底部区块，列出与其它 Mod 的冲突结论（详见 §13）+「重新检测」按钮；面板打开时按 5 秒节流自动重扫。
-- 面板宽度 484、高度自适应（`min(660, 屏幕高-48)`），标题行右侧显示 Mod 版本号（读程序集同目录的 info.ini，不会写死）。
+- **兼容性**：不在面板展示；启动时扫一次写日志（`Player.log` 里的 `[DeathRewind] 兼容性检查：…`），详见 §13。
+- 面板宽度 484、高度按内容实测自适应（上限 `屏幕高-48`），标题行右侧显示 Mod 版本号（读程序集同目录的 info.ini，不会写死）。
 - 改动立即生效并**写回 config.txt**（只改 `enhancedMode` / `rewindCooldown` 两行）。
 - v1.0.14 起移除「每关 1UP 上限」设置：积分满 100 必发 1UP（不限次数），真正的限制是复活冷却。
-- 切换增强模式会清零本关的分数与已赚 1UP（不跨模式保留）。
+- 切换增强模式**只翻转开关**，本关的分数、已赚 1UP（`UpsEarned`）与已用次数（`UpsUsed`）全部保留：
+  用掉机会后开增强不会凭空多出 1UP，关→开也不会吞掉已赚的 1UP。
 
 ---
 
@@ -452,9 +455,10 @@ bash tools/build.sh
 25. **敌人相关查询必须走字典，不能线性扫描注册表**：`FindHealthById` / `GetEnemyObject` / `GetEnemyId` / `GetEnemyAi` / `GetEnemyReceiver` 都在 full 模式的锚点构建与回退差量循环里按敌人逐个调用，线性扫描会退化成 O(n²)（每 5 秒一次锚点构建，长单局必然卡顿）。
 26. **「1UP」提示音的音频必须内嵌 + 自行解码**：mp3 只有 Unity 的导入管线或 `UnityWebRequest` 能解，Mod 目录既不是 Unity 工程也不保证可读 → 构建期转成 16bit PCM WAV 内嵌进程序集，运行时用 `WavPcm` 逐 chunk 解析（转换产物在 `fmt` 与 `data` 之间会夹 `FLER` 等附属 chunk，固定偏移解析会读错）。触发判定放在纯逻辑 `OneUpCue` 里（关卡生命周期武装），**不要**直接跟着 HUD 指示器可见性走——主菜单里「还有回溯机会」恒成立，会在进游戏前就响。积分满 100 发放 1UP 时也播同一提示音（`OnEnemyKilled` 直接调用，同样受 `oneUpSound` 开关约束）。
 27. **击杀积分只算玩家击杀，判定方式与任务系统一致**：`EntitySampler` 订阅**静态事件** `Health.OnDead`（签名 `Action<Health, DamageInfo>`），用 `DamageInfo.fromCharacter` 判断击杀者——`killer.Health.IsMainCharacterHealth` 为真才算玩家击杀（游戏任务计数 `QuestTask_KillCount.Health_OnDead` 用的是同一条判据 `CharacterMainControlExtensions.IsMainCharacter`）。**不要**改回"采样时观察存活→死亡跳变"那种判定：它拿不到 `DamageInfo`，分不清玩家击杀与环境/队友击杀。`Health.OnDead` 是静态事件，**Mod 停用时必须 `UnsubscribeDeathEvents()` 退订**。
-28. **多次复活必须让回溯窗口随使用次数扩展**：第一次回溯会丢弃更年轻的锚点，若窗口固定 60s，第二次回溯就没有可选目标 → 有效窗口 `maxRewindAge × (已用次数 + 1)`。实际能回溯多深仍受锚点环保留量限制（每空间 `anchorCount` × 间隔）。
+28. **回溯窗口固定为 `maxRewindAge`，回溯成功后锚点时间线重算**：不要按已用次数扩展窗口——锚点环只保留 16×5s≈80s，`60→120→180` 的"有效窗口"会指向环外/更老的残留锚点，表现为时间轴节点错位。正确做法是 `CommitRewind` 后调用 `ModBehaviour.OnRewindSucceeded()`：丢弃旧时间线全部锚点、重置网格与起点锚点、清 `AnchorBuilder` 缓存，新节点从复活这一刻重新累积（复活后 60s 内只有 0~1 个节点，属预期）。
 29. **抓缩略图不许碰游戏主相机**：在主相机上 `targetTexture = rt` + `cam.Render()` 会让主相机在帧中途多渲一次，Metal/macOS 上表现为**每 5 秒闪一帧**（锚点网格间隔 = 闪屏频率）。必须用专用抓图相机（`CopyFrom` 主相机设置 + 自己的 transform，`enabled = false`，只手动 `Render()` 到 RT）。同理，**不要**在帧中途用 `ScreenCapture.CaptureScreenshotAsTexture` 全屏回读（分配整屏纹理 + 卡顿）。
 30. **自定义音效必须走游戏的 FMOD 管线**：Duckov 的声音全是 FMOD 事件（`Duckov.AudioManager.Post` → `FMOD.Studio.EventInstance`），Unity 自己的 `AudioSource` 在游戏里**听不到**（实测：无报错、clip 有数据，但完全无声——Unity 这条输出通路被游戏静音了）。所以提示音主路径是 post 游戏自带事件 `UI/level_up`（语义=拿到 1UP，且跟随游戏音量/静音设置）。**不要**改回纯 `AudioSource.PlayOneShot` 当主路径——那正是"集满 100 分没有音效"的根因。FMOD 核心 API（`FMOD.System.createSound` 等）在游戏里**不可用**（`FMODUnity.dll` 只有 Studio API，`FMOD.Modes`/`SoundInfo` 缺失），所以自定义 WAV 只能留作兜底。
+31. **关卡状态（积分/1UP/冷却）只在下一关开始时重置**：死亡会先触发 `RaidEnd → OnLevelEnded`，此时死亡结算界面还在显示；若在 `HandleLevelEnded` 里 `ScoreState.ResetLevel()`，`Held` 会变回 1，状态栏在"已经没机会"的第二次死亡界面凭空显示一枚可用 1UP。重置统一放在 `HandleLevelStarted`。另外 HUD 指示器在玩家 `Health.IsDead` 时必须隐藏（`showCoin` 加 `!playerDead`），避免死亡结算期间残留 1UP。
 
 ---
 
@@ -541,7 +545,7 @@ ilspycmd "$GAME/TeamSoda.Duckov.Core.dll" > /tmp/DuckovCore_all.cs
 |---|---|---|
 | 纯逻辑（Core） | `ModCompatAnalyzer` + `CompatReport`/`CompatIssue`/`HotkeySpec`/`HotkeyClaim` | 采集数据 → 兼容性结论（可单测，`tests/DeathRewind.Tests/ModCompatReportTests.cs`） |
 | 运行时采集（Compat） | `ModCompatScanner.Scan(config)` | 读游戏/Harmony 真实状态，喂给判定层 |
-| 展示 | `ModBehaviour.RefreshCompatReport()` + `RewindSettingsPanel` 的「兼容性」区块 | 启动写日志；面板打开时按 5 秒节流刷新 + 「重新检测」按钮 |
+| 展示 | `ModBehaviour.RefreshCompatReport()` | 启动写日志（不在设置面板展示） |
 
 ### 13.2 能检出的冲突
 
@@ -575,5 +579,4 @@ ilspycmd "$GAME/TeamSoda.Duckov.Core.dll" > /tmp/DuckovCore_all.cs
 
 ### 13.5 手动排查入口
 
-- 启动日志：`[DeathRewind] 兼容性检查：…`（`ModLog.LogImportant`），每条结论一行，前缀 `[兼容性·错误]` / `[兼容性·警告]` / `[兼容性]`。
-- 游戏内：按 `Ctrl+N` → 面板底部「兼容性」区块。
+- 启动日志：`[DeathRewind] 兼容性检查：…`（`ModLog.LogImportant`），每条结论一行，前缀 `[兼容性·错误]` / `[兼容性·警告]` / `[兼容性]`（唯一入口，设置面板不再展示）。

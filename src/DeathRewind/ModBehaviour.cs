@@ -414,7 +414,11 @@ namespace DeathRewind
             bool hasRevive = _score.Held > 0;
             bool cooldownReady = _cooldown.IsReady(_clock.CurrentTick);
             bool enhanced = _score.Enhanced;
-            bool showCoin = _ring != null && !LevelAccess.InBaseLevel && (hasRevive || enhanced);
+            // 玩家已死亡（死亡结算界面/原生死亡流程中）→ 不显示 1UP 指示：
+            // 否则第二次死亡（积分未攒满）时会残留一个看起来"可用"的 1UP
+            var main = LevelAccess.MainCharacter;
+            bool playerDead = main != null && main.Health != null && main.Health.IsDead;
+            bool showCoin = _ring != null && !LevelAccess.InBaseLevel && !playerDead && (hasRevive || enhanced);
             double cooldownRemain = cooldownReady ? 0 : _cooldown.Remaining(_clock.CurrentTick);
             RewindIndicator.SetState(_score, showCoin, cooldownReady, cooldownRemain);
             // 「1UP」FMOD 提示音（UI/level_up）保留给默认模式；增强模式改由 +1UP 发放时的自定义 oneup.wav 提示
@@ -463,6 +467,30 @@ namespace DeathRewind
             ModLog.LogImportant($"[DeathRewind] 复活机会已用：剩余 {_score.Held} 次");
         }
 
+        /// <summary>
+        /// 回溯成功：锚点时间线从复活这一刻**重新计算**——旧时间线的全部锚点（目标与更老的）
+        /// 一律丢弃，避免沿用"更老状态"让时间轴节点错位：节点始终是复活后新历史的 60/50/40/30。
+        /// 调用后起点锚点会被重新采集（玩家位置稳定性重新计时）。
+        /// </summary>
+        public void OnRewindSucceeded()
+        {
+            if (_ring == null) return;
+            // 释放所有锚点的采样载荷（目标锚点的世界已被重建，旧快照不再有用）
+            foreach (var a in _ring.Anchors) _sampler?.ReleaseAnchor(a);
+            _ring.Clear();
+            _ring.ResetGridTo(_clock.CurrentTick, _clock.CurrentTick);
+            _levelStartAnchors.Clear();
+            _scenesWithStartAnchor.Clear();
+            _pendingBuild = null;
+            _builder?.ResetCache();
+            _nextSampleAt = _clock.CurrentTick;
+            _startAnchorNotBeforeTick = _clock.CurrentTick + StartAnchorSettleSeconds;
+            _hasLastPlayerPos = false;     // 复活后被传送回锚点位置 → 重新判断坐标稳定性
+            _playerStable = false;
+            _sampler?.SetAnchorCoverage(_ring.Anchors);
+            ModLog.LogImportant("[DeathRewind] 回溯成功：锚点时间线已从复活时刻重新计算");
+        }
+
         /// <summary>设置面板改动：立即生效并写回 config.txt（供下次启动读取）。</summary>
         public void ApplyPanelSettings(bool enhancedMode, int cooldownSeconds)
         {
@@ -471,7 +499,8 @@ namespace DeathRewind
             _config.RewindCooldownSeconds = (cooldownSeconds == 0 || cooldownSeconds == 30 || cooldownSeconds == 60 || cooldownSeconds == 90)
                 ? cooldownSeconds
                 : 60;
-            // 增强模式开关：切到关闭时经济状态清零（分数 / 已赚 1UP 不跨模式保留）
+            // 增强模式开关：只翻转开关，不动 Score / UpsEarned / UpsUsed——
+            // 既不会"用掉机会后开增强"凭空多出 1UP，也不会"没用掉奖励机会时关→开"丢掉 1UP
             _score.SetEnhanced(_config.EnhancedMode);
             _cooldown.Enabled = _config.EnhancedMode;
             _cooldown.SetDuration(_config.RewindCooldownSeconds);
@@ -540,8 +569,9 @@ namespace DeathRewind
             _sampler.ResetRegistry();
             AnchorBuilder.DeleteAllAnchorFiles();
             _oneUpCue.OnLevelEnded();     // 解除武装，等下一关开始
-            _score.ResetLevel();
-            _cooldown.Reset();
+            // 积分/1UP 与冷却**不在这里重置**：死亡会触发 RaidEnd → OnLevelEnded，
+            // 此时死亡结算界面还在显示，提前重置会让状态栏凭空显示一枚"可用"的 1UP
+            //（实际本次死亡已经没有回溯机会）。统一在下一关 HandleLevelStarted 重置。
             ModLog.Log("[DeathRewind] level ended: state cleared");
         }
 

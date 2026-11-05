@@ -21,7 +21,7 @@
 2. **积分**：击杀 BOSS（50 分）与普通生物（5 分）累计积分；每满 100 分额外发 1 次复活机会并清零积分；积分每关重算。
 3. **多次复活**：每关可持有的 1UP 上限可调（默认 1，兼容现状）；用掉一次复活后进入冷却，冷却期内不能再复活；HUD 与面板展示删除线的「×N UP」与冷却倒计时。
 
-> **默认保持原样**：`enhancedMode=false`（默认）时，本规格里的积分、上限、冷却、回溯窗口扩展**全部不生效**——
+> **默认保持原样**：`enhancedMode=false`（默认）时，本规格里的积分、上限、冷却、回溯后锚点重算**全部不生效**——
 > 行为与 v1.0.11 完全一致（每关一次复活）。面板里开启增强模式后才启用。
 
 ## 2. 规则（权威定义）
@@ -45,7 +45,8 @@
   - 未达上限 → `Score = 0`、`UpsEarned++`，返回 `true`（**发放 1UP，播放音效**）；
   - 已达上限 → `Score` 封顶为 100（面板显示「已满」），返回 `false`。
 - `TryConsume()`：`Held > 0` 时 `UpsUsed++` 并返回 `true`；否则 `false`。
-- `ResetLevel(cap)`：关卡开始/结束时把 `Score / UpsEarned / UpsUsed` 清零，`Cap` 取新值。
+- `ResetLevel()`：**关卡开始时**把 `Score / UpsEarned / UpsUsed` 清零（关卡结束不重置——死亡先触发 RaidEnd，提前重置会让死亡结算界面显示一枚实际不存在的 1UP）。
+- `SetEnhanced(enabled)`：**只翻转开关**，`Score / UpsEarned / UpsUsed` 全部保留——用掉机会后开增强不会凭空多出 1UP，关→开也不会吞掉已赚的 1UP。
 
 ### 2.2 冷却
 
@@ -53,13 +54,12 @@
 - 复活**成功**（`RestoreAsync` 返回 ok）时才扣 1UP 并开始冷却；回退失败不扣。
 - 冷却期内死亡 → 不提供回溯（走原生死亡流程），日志写明剩余秒数。
 
-### 2.3 回溯窗口随使用次数扩展
+### 2.3 回溯后锚点时间线重算（窗口固定）
 
-锚点环容量不变（每空间 16 个 ≈ 80s 历史）。为了让第二次之后的回溯仍有目标：
+锚点环容量不变（每空间 16 个 ≈ 80s 历史），**回溯窗口固定为 `maxRewindAge`**（不按已用次数扩展——放大会指向环外，造成时间轴节点错位）。
 
-- 有效回溯窗口 `effectiveMaxAge = maxRewindAge × (已用回溯次数 + 1)`（第 1 次 60s、第 2 次 120s、第 3 次 180s）。
-- 候选节点仍按 `timelineStep` 从最老向内取 4 个；找不到时回退到该空间最老锚点（判定同样用有效窗口）。
-- 不改 `CommitRewind` 的语义（回退后更年轻的锚点仍被丢弃），历史深度由锚点环保留量决定。
+- 回溯成功后 `ModBehaviour.OnRewindSucceeded()`：释放全部锚点采样载荷、`Ring.Clear()`、`ResetGridTo(当前 tick)`、清空起点锚点登记、`AnchorBuilder.ResetCache()`。
+- 旧时间线的锚点（含比目标更老的）一律丢弃；节点从复活这一刻重新累积，始终是新历史的 60/50/40/30（复活后未满 60s 时节点更少，属预期）。
 
 ### 2.4 击杀判定（只算玩家击杀）
 
@@ -82,7 +82,7 @@
 | `Core/RewindCooldown.cs` | 纯逻辑 | 冷却计时（可单测） |
 | `Unity/EntitySampler.cs` | Unity | 击杀检测 → `EnemyKilled(id, isBoss)` 事件 |
 | `UI/RewindSettingsPanel.cs` | UI | `Ctrl+N` 设置面板（IMGUI），得分/1UP/冷却展示 + 增强模式与两项设置 |
-| `Harmony/DeathInterceptor.cs` | Harmony | 死亡入口按「有 1UP 且冷却结束」放行；回退成功后扣 1UP 并开始冷却；有效窗口扩展 |
+| `Harmony/DeathInterceptor.cs` | Harmony | 死亡入口按「有 1UP 且冷却结束」放行；回退成功后扣 1UP 并开始冷却；窗口固定 + 回溯成功后重算锚点时间线 |
 | `Config/ModConfig.cs` | Config | `maxRewinds` / `rewindCooldown` 解析、校验、写回 config.txt |
 | `ModBehaviour.cs` | 入口 | 装配 ScoreState / Cooldown / 采样器事件；HUD 指示与冷却联动；OnGUI 转发面板 |
 

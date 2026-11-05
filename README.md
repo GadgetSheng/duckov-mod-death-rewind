@@ -124,7 +124,7 @@ Steam 创意工坊副本与本地 `Contents/Mods` 副本会被游戏**同时加�
 |---|---|
 | 判定规则与结论模型（纯逻辑）：`ModCompatAnalyzer` + `CompatReport` / `CompatIssue` / `HotkeySpec` / `HotkeyClaim` | `src/DeathRewind/Core/ModCompatReport.cs`（新增） |
 | 采集真实证据：已激活 Mod 列表、Harmony 补丁表重叠、0Harmony 版本、快捷键占用、config.txt vs 框架存档 | `src/DeathRewind/Compat/ModCompatScanner.cs`（新增） |
-| 启动时自动扫一次并写日志；设置面板底部新增「兼容性」区块（打开面板时 5 秒节流刷新 + 「重新检测」按钮） | `ModBehaviour.RefreshCompatReport()`、`UI/RewindSettingsPanel.cs` |
+| 启动时自动扫一次并写日志（设置面板不再展示兼容性区块） | `ModBehaviour.RefreshCompatReport()` |
 
 能检出的冲突：
 

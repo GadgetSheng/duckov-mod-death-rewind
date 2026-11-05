@@ -46,16 +46,13 @@ namespace DeathRewind.Core
         }
 
         /// <summary>
-        /// 切换增强模式。模式变化时经济状态重算（分数与已赚 1UP 不跨模式保留），
-        /// 避免"关掉再打开"白拿一次 1UP。
+        /// 切换增强模式：**只翻转开关，不修改任何记账**。
+        /// · 已用次数（UpsUsed）保留 → "用掉机会后再开增强"不会凭空多出一次复活；
+        /// · 已赚到的 1UP（UpsEarned）保留 → "没用掉奖励机会时关→开增强"不会莫名少一次。
         /// </summary>
         public void SetEnhanced(bool enabled)
         {
-            if (Enhanced == enabled) return;
             Enhanced = enabled;
-            Score = 0;
-            UpsEarned = 0;
-            UpsUsed = 0;
         }
 
         /// <summary>

@@ -114,20 +114,6 @@ namespace DeathRewind.Harmony
         }
 
         /// <summary>
-        /// 有效回溯窗口（秒）：随**已用回溯次数**扩展（maxRewindAge → 2× → 3×）。
-        /// 第一次回溯会把更年轻的锚点丢弃，若窗口不扩展，第二次回溯就没有可选目标了。
-        /// 实际能回溯多深仍受锚点环保留量限制（每空间 anchorCount × 间隔）。
-        /// </summary>
-        private static double EffectiveWindowAge(AnchorRing ring)
-        {
-            // 增强模式关闭时保持旧行为：窗口固定 maxRewindAge
-            var score = _owner != null ? _owner.ScoreState : null;
-            if (score == null || !score.Enhanced) return _config.MaxRewindAge;
-            int used = ring != null ? ring.RewindCount : 0;
-            return _config.MaxRewindAge * (used + 1);
-        }
-
-        /// <summary>
         /// 结算界面的回溯候选节点（最多 <see cref="MaxTimelineNodes"/> 个，旧→新）：
         /// 从最老（maxRewindAge，默认 60s）向内按 timelineStep（默认 10s）取点，
         /// 即约 60 / 50 / 40 / 30 四个选项。
@@ -143,8 +129,10 @@ namespace DeathRewind.Harmony
 
             // 跨空间候选：当前空间的锚点优先，当前空间不够时用**本关卡其它空间**的锚点补位。
             // 环内锚点必然属于当前关卡（换关卡时 HandleLevelStarted 会清空锚点环）。
-            // 有效窗口随已用回溯次数扩展（60 → 120 → 180 秒）：第二次之后的回溯要能选到更早的锚点。
-            double windowAge = EffectiveWindowAge(ring);
+            // 回溯窗口固定为 maxRewindAge（默认 60s），不随已用次数扩展：
+            // 时间轴节点始终是 60/50/40/30 秒；锚点环只保留 16×5s=80s 的数据，
+            // 窗口放大会指向环外，造成节点错位/缺失。
+            double windowAge = _config.MaxRewindAge;
             var targets = ring.SelectByAgeAcrossSpaces(LevelAccess.CurrentLevelSpaceKeys,
                                                         windowAge, _config.TimelineStep,
                                                         MaxTimelineNodes, sceneKey);
@@ -448,11 +436,12 @@ namespace DeathRewind.Harmony
             {
                 var removed = new List<Anchor>();
                 _owner.Ring.CommitRewind(anchor, removed);
-                _owner.Ring.ResetGridTo(anchor.GridTimestamp, _owner.CurrentTick);
-                _owner.ConsumeRewind();   // 扣 1UP + 开始复活冷却（回退失败不扣）
+                int rewindCount = _owner.Ring.RewindCount;
                 foreach (var old in removed) _owner.ReleaseAnchor(old);
+                _owner.ConsumeRewind();   // 扣 1UP（回退失败不扣；冷却从重新获得 1UP 起算）
+                _owner.OnRewindSucceeded();   // 旧时间线全部丢弃，锚点从复活时刻重新计算
                 _owner.ReleaseCommittedDestroy();
-                ModLog.LogImportant($"[DeathRewind] rewind result=ok rewindCount={_owner.Ring.RewindCount} consumedAnchor={anchor.Id}");
+                ModLog.LogImportant($"[DeathRewind] rewind result=ok rewindCount={rewindCount} consumedAnchor={anchor.Id}");
                 PostReviveFixup();
                 _owner.StartCoroutine(PostReviveGuard());
             }
@@ -469,45 +458,109 @@ namespace DeathRewind.Harmony
         }
 
         /// <summary>
-        /// 直接校正 HUD 状态条（左下角 HP/水/耐力，<c>Duckov.UI.BarDisplays.BarDisplayController</c>
-        /// 家族）的填充率。<paramref name="logFix"/> 为 true 时实际发生校正才打 LogImportant。
+        /// 直接校正 HUD 状态条（左下角 HP/水/耐力）的填充率。两层覆盖：
+        /// 1) <c>Duckov.UI.BarDisplays.BarDisplayController</c> 家族（Current/Max 反映实时数值）；
+        /// 2) 所有 <c>Duckov.UI.BarDisplay</c>（HUD 与结算面板通用）——按条上「当前/上限」文字反算比例。
+        /// 第 2 层是必需的：<c>BarDisplay.SetValue</c> 的文字立即写入、填充走 DOTween，
+        /// tween 若在冻结窗口创建或被随后 KillAll 杀掉，就会出现「文字满值、填充空置」。
+        /// <paramref name="logFix"/> 为 true 时实际发生校正才打 LogImportant。
         /// </summary>
         private static void FixHudBarFills(bool logFix = false)
         {
             try
             {
-                var ctrlType = AccessTools.TypeByName("Duckov.UI.BarDisplays.BarDisplayController");
-                if (ctrlType == null) return;
                 const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                foreach (var obj in UnityEngine.Object.FindObjectsOfType(ctrlType, true))
+                int fixedCount = 0;
+
+                // 第一层：控制器家族
+                var ctrlType = AccessTools.TypeByName("Duckov.UI.BarDisplays.BarDisplayController");
+                if (ctrlType != null)
+                {
+                    foreach (var obj in UnityEngine.Object.FindObjectsOfType(ctrlType, true))
+                    {
+                        try
+                        {
+                            var ctrl = obj as MonoBehaviour;
+                            if (ctrl == null) continue;
+                            var t = ctrl.GetType();
+                            // Current/Max 是 protected virtual（HP/饥饿/口渴/耐力各实现一份）
+                            if (t.GetProperty("Current", flags)?.GetValue(ctrl) is not float cur) continue;
+                            if (t.GetProperty("Max", flags)?.GetValue(ctrl) is not float mx) continue;
+                            var bar = AccessTools.Field(ctrlType, "bar")?.GetValue(ctrl) as MonoBehaviour;
+                            if (bar == null) continue;
+                            // BarDisplay.fill 是私有 Image 字段
+                            if (AccessTools.Field(bar.GetType(), "fill")?.GetValue(bar) is not Image fill) continue;
+                            float target = mx > 0f ? Mathf.Clamp01(cur / mx) : 1f;
+                            if (!Mathf.Approximately(fill.fillAmount, target))
+                            {
+                                fill.fillAmount = target;
+                                fixedCount++;
+                            }
+                        }
+                        catch { /* 单个控制器失败不影响其余 */ }
+                    }
+                }
+
+                // 第二层：所有 BarDisplay，按文字反算目标（覆盖无控制器的 HUD 条与被冻结 tween）
+                var fillField = AccessTools.Field(typeof(BarDisplay), "fill");
+                var curField = AccessTools.Field(typeof(BarDisplay), "text_Current");
+                var maxField = AccessTools.Field(typeof(BarDisplay), "text_Max");
+                foreach (var obj in UnityEngine.Object.FindObjectsOfType(typeof(BarDisplay), true))
                 {
                     try
                     {
-                        var ctrl = obj as MonoBehaviour;
-                        if (ctrl == null) continue;
-                        var t = ctrl.GetType();
-                        // Current/Max 是 protected virtual（HP/饥饿/口渴/耐力各实现一份）
-                        if (t.GetProperty("Current", flags)?.GetValue(ctrl) is not float cur) continue;
-                        if (t.GetProperty("Max", flags)?.GetValue(ctrl) is not float mx) continue;
-                        var bar = AccessTools.Field(ctrlType, "bar")?.GetValue(ctrl) as MonoBehaviour;
-                        if (bar == null) continue;
-                        // BarDisplay.fill 是私有 Image 字段
-                        if (AccessTools.Field(bar.GetType(), "fill")?.GetValue(bar) is not Image fill) continue;
-                        float target = mx > 0f ? Mathf.Clamp01(cur / mx) : 1f;
+                        if (obj is not BarDisplay bar) continue;
+                        if (fillField?.GetValue(bar) is not Image fill) continue;
+                        var curText = curField?.GetValue(bar) as TMPro.TextMeshProUGUI;
+                        var maxText = maxField?.GetValue(bar) as TMPro.TextMeshProUGUI;
+                        float cur = ParseBarNumber(curText != null ? curText.text : null);
+                        float mx = ParseBarNumber(maxText != null ? maxText.text : null);
+                        if (mx <= 0f) continue;
+                        float target = Mathf.Clamp01(cur / mx);
                         if (!Mathf.Approximately(fill.fillAmount, target))
                         {
                             fill.fillAmount = target;
-                            if (logFix)
-                                ModLog.LogImportant($"[DeathRewind] HUD 状态条填充校正: {cur:0.#}/{mx:0.#} → {target:0.00}");
+                            fixedCount++;
                         }
                     }
-                    catch { /* 单个控制器失败不影响其余 */ }
+                    catch { /* 单条失败不影响其余 */ }
+                }
+
+                if (logFix && fixedCount > 0)
+                    ModLog.LogImportant($"[DeathRewind] HUD 状态条填充校正: {fixedCount} 条");
+
+                // 第三层：HealthHUD / EnergyHUD / WaterHUD（每帧按真实数值刷新的条）。
+                // 把 percent 缓存置 -1，迫使下一帧 Update 重新写 fillImage.fillAmount，
+                // 覆盖「缓存已等于当前比例、但填充值被外部（DOTween.Kill / HUD 重建）改回 0」。
+                foreach (var typeName in HudPercentTypeNames)
+                {
+                    var t = AccessTools.TypeByName(typeName);
+                    if (t == null) continue;
+                    var percentField = AccessTools.Field(t, "percent");
+                    if (percentField == null) continue;
+                    foreach (var obj in UnityEngine.Object.FindObjectsOfType(t, true))
+                    {
+                        try { percentField.SetValue(obj, -1f); }
+                        catch { /* 单个失败忽略 */ }
+                    }
                 }
             }
             catch (Exception e)
             {
                 ModLog.LogWarning($"[DeathRewind] HUD 状态条校正失败: {e.Message}");
             }
+        }
+
+        /// <summary>按帧刷新、带 percent 缓存的 HUD 状态条类型（全局命名空间）。</summary>
+        private static readonly string[] HudPercentTypeNames = { "HealthHUD", "EnergyHUD", "WaterHUD" };
+
+        /// <summary>解析状态条上的数值文本（容忍千分位逗号与首尾空白）。</summary>
+        private static float ParseBarNumber(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0f;
+            var s = text.Replace(",", string.Empty).Trim();
+            return float.TryParse(s, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0f;
         }
 
         /// <summary>

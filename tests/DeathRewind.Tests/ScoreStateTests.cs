@@ -199,7 +199,33 @@ namespace DeathRewind.Tests
         }
 
         [Fact]
-        public void SetEnhanced_False_DropsEarnedUpsAndScore()
+        public void SetEnhanced_True_AfterChanceUsed_DoesNotGrantUp()
+        {
+            // 用户反馈的 bug：默认模式用掉唯一机会后再开增强模式，不能凭空多出一次复活
+            var score = new ScoreState();
+            Assert.True(score.TryConsume());
+            Assert.Equal(0, score.Held);
+
+            score.SetEnhanced(true);
+
+            Assert.Equal(0, score.Held);            // 仍是 0，没有凭空 +1
+            Assert.Equal(1, score.UpsUsed);         // 已用次数保留
+        }
+
+        [Fact]
+        public void SetEnhanced_True_AfterChanceUsed_ActivatesScoring()
+        {
+            var score = new ScoreState();
+            score.TryConsume();                     // 已用掉保底机会 → 计分门槛已满足
+            score.SetEnhanced(true);
+
+            Assert.False(score.AddKill(KillScore.CommonPoints));
+            Assert.Equal(KillScore.CommonPoints, score.Score);   // 击杀立刻开始计分
+            Assert.Equal(0, score.UpsEarned);
+        }
+
+        [Fact]
+        public void SetEnhanced_False_KeepsEarnedUp()
         {
             var score = Enhanced();
             for (int i = 0; i < 20; i++) score.AddKill(KillScore.CommonPoints);
@@ -207,23 +233,25 @@ namespace DeathRewind.Tests
 
             score.SetEnhanced(false);
 
-            Assert.Equal(0, score.UpsEarned);
-            Assert.Equal(0, score.Score);
+            Assert.Equal(1, score.UpsEarned);       // 已赚到的 1UP 不因关增强而丢失
             Assert.Equal(1, score.Held);
+            Assert.Equal(1, score.UpsUsed);
         }
 
         [Fact]
-        public void SetEnhanced_TrueAgain_StartsFromCleanScore()
+        public void SetEnhanced_ToggleOffOn_KeepsEarnedUp()
         {
+            // 用户反馈的 bug：没用掉刚赚到的复活机会时关→开增强，不能少一次
             var score = Enhanced();
             for (int i = 0; i < 20; i++) score.AddKill(KillScore.CommonPoints);
-            score.SetEnhanced(false);
+            Assert.Equal(1, score.Held);
 
+            score.SetEnhanced(false);
             score.SetEnhanced(true);
 
-            Assert.Equal(0, score.Score);
-            Assert.Equal(0, score.UpsEarned);
-            Assert.Equal(1, score.Held);
+            Assert.Equal(1, score.Held);            // 机会未被吞掉
+            Assert.Equal(1, score.UpsEarned);
+            Assert.Equal(1, score.UpsUsed);
         }
 
         [Fact]
